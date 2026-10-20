@@ -79,6 +79,7 @@ int main (int argc, char** argv)
     proc.randomize (29);
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* editor = dynamic_cast<SeedEditor*> (ed.get());
+    editor->setGrowthForTest (1.f);
     for (int page = 0; page < 3; ++page)
     {
         editor->showPageForTest (page);
@@ -88,6 +89,27 @@ int main (int argc, char** argv)
         juce::FileOutputStream fo (png);
         juce::PNGImageFormat().writeImageToStream (img, fo);
         std::printf ("wrote %s\n", png.getFullPathName().toRawUTF8());
+    }
+
+    // a frame from the middle of the growth animation, and a different seed's tree
+    editor->showPageForTest (1);
+    editor->setGrowthForTest (0.2f);
+    {
+        auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+        const auto png = outDir.getChildFile ("growing.png");
+        png.deleteFile();
+        juce::FileOutputStream fo (png);
+        juce::PNGImageFormat().writeImageToStream (img, fo);
+    }
+    proc.randomize (4242);
+    editor->syncForTest();             // the editor timer would do this: the tree regrows for the new seed
+    editor->setGrowthForTest (1.f);
+    {
+        auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+        const auto png = outDir.getChildFile ("seed4242.png");
+        png.deleteFile();
+        juce::FileOutputStream fo (png);
+        juce::PNGImageFormat().writeImageToStream (img, fo);
     }
 
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);

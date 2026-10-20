@@ -54,9 +54,11 @@ namespace
             f.lineTo (pts.back().x, baseY);
             f.lineTo (pts.front().x, baseY);
             f.closeSubPath();
-            g.setColour (c.withAlpha (0.16f));
+            g.setColour (c.withAlpha (0.2f));
             g.fillPath (f);
         }
+        g.setColour (c.withAlpha (0.2f));
+        g.strokePath (path, juce::PathStrokeType (thick + 4.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         g.setColour (c);
         g.strokePath (path, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
@@ -67,6 +69,25 @@ namespace
         const float s = pointingUp ? 1.f : -1.f;
         p.addTriangle (tip.x, tip.y, tip.x - 4.5f, tip.y + 8.f * s, tip.x + 4.5f, tip.y + 8.f * s);
         g.fillPath (p);
+    }
+
+    // red neon text: a soft halo of offset copies underneath the crisp text
+    void glowText (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, const juce::Font& f,
+                   juce::Colour c, juce::Justification j)
+    {
+        g.setFont (f);
+        const float radii[] = { 5.f, 3.f, 1.6f };
+        const float alphas[] = { 0.05f, 0.09f, 0.16f };
+        for (int k = 0; k < 3; ++k)
+            for (int a = 0; a < 8; ++a)
+            {
+                const float ang = (float) a * juce::MathConstants<float>::pi * 0.25f;
+                g.setColour (c.withAlpha (alphas[k]));
+                g.drawText (text, area.translated ((int) std::lround (std::cos (ang) * radii[k]),
+                                                   (int) std::lround (std::sin (ang) * radii[k])), j);
+            }
+        g.setColour (c.interpolatedWith (ui::paper, 0.18f));
+        g.drawText (text, area, j);
     }
 }
 
@@ -81,9 +102,9 @@ juce::Colour ui::groupColour (int group)
 {
     switch (group)
     {
-        case gVol: case gOscA: case gAdj:          return ink;
+        case gVol: case gOscA: case gAdj:          return paper;
         case gMod: case gOscB: case gFlt:          return red;
-        default:                                   return slate;   // env, lfo, fm, mix, sat, reverb
+        default:                                   return mist;    // env, lfo, fm, mix, sat, reverb
     }
 }
 
@@ -94,14 +115,17 @@ SeedLookAndFeel::SeedLookAndFeel()
     setColour (juce::TextButton::buttonColourId, ink);
     setColour (juce::TextButton::textColourOffId, paper);
     setColour (juce::TextButton::textColourOnId, paper);
-    setColour (juce::TextEditor::backgroundColourId, mist.withAlpha (0.5f));
-    setColour (juce::TextEditor::textColourId, ink);
-    setColour (juce::TextEditor::outlineColourId, slate.withAlpha (0.6f));
+    setColour (juce::TextEditor::backgroundColourId, ink);
+    setColour (juce::TextEditor::textColourId, paper);
+    setColour (juce::TextEditor::outlineColourId, slate.withAlpha (0.7f));
     setColour (juce::TextEditor::focusedOutlineColourId, red);
+    setColour (juce::TextEditor::highlightColourId, red.withAlpha (0.5f));
     setColour (juce::CaretComponent::caretColourId, red);
-    setColour (juce::Label::textColourId, ink);
+    setColour (juce::Label::textColourId, paper);
     setColour (juce::BubbleComponent::backgroundColourId, ink);
-    setColour (juce::BubbleComponent::outlineColourId, ink);
+    setColour (juce::BubbleComponent::outlineColourId, red);
+    setColour (juce::TooltipWindow::backgroundColourId, ink);
+    setColour (juce::TooltipWindow::outlineColourId, red);
     setColour (juce::TooltipWindow::textColourId, paper);
 }
 
@@ -114,13 +138,13 @@ void SeedLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, 
 
     const auto b = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
     const float cx = b.getCentreX(), cy = b.getCentreY();
-    const float thick = 4.6f;
+    const float thick = 4.2f;
     const float r = std::min (b.getWidth(), b.getHeight()) * 0.5f - thick * 0.5f - 1.f;
     const float ang = startAngle + pos * (endAngle - startAngle);
 
     juce::Path track;
     track.addCentredArc (cx, cy, r, r, 0.f, startAngle, endAngle, true);
-    g.setColour (mist);
+    g.setColour (slate.withAlpha (0.4f));
     g.strokePath (track, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
 
     juce::Path val;
@@ -128,17 +152,22 @@ void SeedLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, 
     if (std::abs (ang - from) > 0.01f)
     {
         val.addCentredArc (cx, cy, r, r, 0.f, std::min (from, ang), std::max (from, ang), true);
+        g.setColour (accent.withAlpha (0.22f));
+        g.strokePath (val, juce::PathStrokeType (thick + 4.f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
         g.setColour (accent);
         g.strokePath (val, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
     }
 
     const float ri = r - thick * 0.5f - 2.f;
-    g.setColour (paper.darker (0.05f));
+    g.setGradientFill (juce::ColourGradient (slate.interpolatedWith (ink, 0.45f), cx - ri * 0.4f, cy - ri * 0.5f,
+                                             ink, cx + ri * 0.7f, cy + ri * 0.8f, true));
     g.fillEllipse (cx - ri, cy - ri, ri * 2.f, ri * 2.f);
+    g.setColour (slate.withAlpha (0.8f));
+    g.drawEllipse (cx - ri, cy - ri, ri * 2.f, ri * 2.f, 1.f);
 
-    g.setColour (ink);
-    g.drawLine (cx + std::sin (ang) * ri * 0.25f, cy - std::cos (ang) * ri * 0.25f,
-                cx + std::sin (ang) * ri * 0.95f, cy - std::cos (ang) * ri * 0.95f, 2.f);
+    g.setColour (paper);
+    g.drawLine (cx + std::sin (ang) * ri * 0.3f, cy - std::cos (ang) * ri * 0.3f,
+                cx + std::sin (ang) * ri * 0.92f, cy - std::cos (ang) * ri * 0.92f, 2.2f);
 }
 
 void SeedLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float sliderPos,
@@ -146,23 +175,34 @@ void SeedLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, 
 {
     using namespace ui;
     const float cy = (float) y + (float) h * 0.5f;
-    g.setColour (mist);
+    g.setColour (slate.withAlpha (0.5f));
     g.fillRoundedRectangle ((float) x, cy - 2.f, (float) w, 4.f, 2.f);
+    g.setColour (red.withAlpha (0.25f));
+    g.fillRoundedRectangle ((float) x, cy - 4.f, sliderPos - (float) x, 8.f, 4.f);
     g.setColour (red);
     g.fillRoundedRectangle ((float) x, cy - 2.f, sliderPos - (float) x, 4.f, 2.f);
-    g.setColour (ink);
+    g.setColour (paper);
     g.fillEllipse (sliderPos - 6.f, cy - 6.f, 12.f, 12.f);
+    g.setColour (red);
+    g.drawEllipse (sliderPos - 6.f, cy - 6.f, 12.f, 12.f, 1.4f);
 }
 
 void SeedLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
 {
     using namespace ui;
-    auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (down ? red : (highlighted ? slate : ink));
+    auto r = b.getLocalBounds().toFloat().reduced (1.5f);
+    if (highlighted || down)
+    {
+        g.setColour (red.withAlpha (0.25f));
+        g.fillRoundedRectangle (r.expanded (1.5f), 6.f);
+    }
+    g.setColour (down ? red : ink.interpolatedWith (slate, 0.14f));
     g.fillRoundedRectangle (r, 4.f);
+    g.setColour (highlighted || down ? paper : red);
+    g.drawRoundedRectangle (r, 4.f, 1.3f);
 }
 
-juce::Font SeedLookAndFeel::getTextButtonFont (juce::TextButton&, int) { return ui::serif (14.f); }
+juce::Font SeedLookAndFeel::getTextButtonFont (juce::TextButton&, int) { return ui::serif (14.f, false, true).withExtraKerningFactor (0.04f); }
 
 void SeedLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
 {
@@ -170,14 +210,16 @@ void SeedLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b
     const auto r = b.getLocalBounds().toFloat();
     const float s = 14.f;
     const juce::Rectangle<float> box (r.getX() + 2.f, r.getCentreY() - s * 0.5f, s, s);
-    g.setColour (highlighted ? slate : ink);
+    g.setColour (highlighted ? paper : mist);
     g.drawRoundedRectangle (box, 3.f, 1.4f);
     if (b.getToggleState())
     {
+        g.setColour (red.withAlpha (0.3f));
+        g.fillRoundedRectangle (box.expanded (2.f), 4.f);
         g.setColour (red);
         g.fillRoundedRectangle (box.reduced (3.f), 2.f);
     }
-    g.setColour (ink);
+    g.setColour (mist);
     g.setFont (serif (14.f));
     g.drawText (b.getButtonText(), r.withTrimmedLeft (s + 8.f), juce::Justification::centredLeft);
 }
@@ -205,11 +247,12 @@ void Knob::paint (juce::Graphics& g)
 {
     const auto& d = kParams[paramIndex];
     g.setFont (ui::serif (13.f));
-    g.setColour (ui::ink.withAlpha (0.85f));
+    g.setColour (ui::mist.withAlpha (0.92f));
     g.drawText (d.id, 0, 47, getWidth(), 16, juce::Justification::centred);
 
     if (d.flags & fStar)
     {
+        g.setColour (ui::red);
         g.setFont (ui::serif (16.f, false, true));
         g.drawText ("*", slider.getRight() + 1, slider.getY() + 1, 12, 16, juce::Justification::centred);
     }
@@ -225,114 +268,330 @@ void Figure::paint (juce::Graphics& g)
     if (fig.isNotEmpty()) cap = b.removeFromBottom (17.f);
     const auto plot = b.reduced (0.f, 1.f);
 
-    g.setColour (ui::mist.withAlpha (0.32f));
+    g.setColour (ui::ink);
     g.fillRoundedRectangle (plot, 3.f);
-    g.setColour (ui::slate.withAlpha (0.45f));
-    g.drawLine (plot.getX(), plot.getY(), plot.getX(), plot.getBottom(), 1.f);
-    g.drawLine (plot.getX(), plot.getBottom(), plot.getRight(), plot.getBottom(), 1.f);
+    g.setColour (ui::mist.withAlpha (0.07f));                       // graticule
+    for (int i = 1; i < 4; ++i)
+    {
+        g.drawLine (plot.getX(), plot.getY() + plot.getHeight() * (float) i / 4.f, plot.getRight(), plot.getY() + plot.getHeight() * (float) i / 4.f, 1.f);
+        g.drawLine (plot.getX() + plot.getWidth() * (float) i / 4.f, plot.getY(), plot.getX() + plot.getWidth() * (float) i / 4.f, plot.getBottom(), 1.f);
+    }
+    g.setColour (ui::slate.withAlpha (0.7f));
+    g.drawRoundedRectangle (plot.reduced (0.5f), 3.f, 1.f);
 
     if (draw) draw (g, plot.reduced (8.f, 7.f));
 
     if (fig.isNotEmpty())
     {
-        g.setFont (ui::serif (12.5f));
-        g.setColour (ui::slate);
+        g.setFont (ui::serif (12.5f, true));
+        g.setColour (ui::slate.brighter (0.3f));
         g.drawText ("figure " + fig, cap.withWidth (70.f), juce::Justification::centredLeft);
-        g.setColour (ui::ink);
+        g.setColour (ui::mist);
+        g.setFont (ui::serif (12.5f));
         g.drawText (caption, cap.withTrimmedLeft (72.f), juce::Justification::centredLeft);
     }
 }
 
 //==============================================================================
-Helix::Helix() { startTimerHz (30); }
+SeedTree::SeedTree() { startTimerHz (30); }
 
-void Helix::timerCallback() { phase += 0.012f; if (phase > juce::MathConstants<float>::twoPi) phase -= juce::MathConstants<float>::twoPi; repaint(); }
-
-void Helix::mouseDown (const juce::MouseEvent& e)
+void SeedTree::timerCallback()
 {
-    const float top = 8.f, zoneH = ((float) getHeight() - 44.f) / 3.f;
-    const int z = juce::jlimit (0, 2, (int) ((e.position.y - top) / zoneH));
+    timeS += 1.f / 30.f;
+    if (growth < 1.f) growth = std::min (1.f, growth + 1.f / (30.f * 2.8f));
+    repaint();
+}
+
+void SeedTree::setSeed (uint32_t s)
+{
+    if (s == rawSeed) return;
+    rawSeed = s;
+    treeSeed = s > 0 ? s : 29;
+    growth = 0.f;
+    rebuild();
+}
+
+void SeedTree::resized() { rebuild(); }
+
+int SeedTree::zoneOfY (float y) const { return y < yA ? 2 : (y < ground ? 1 : 0); }
+
+juce::Point<float> SeedTree::bez (const Seg& s, float u) const
+{
+    const float v = 1.f - u;
+    return { v * v * s.a.x + 2.f * v * u * s.c.x + u * u * s.b.x,
+             v * v * s.a.y + 2.f * v * u * s.c.y + u * u * s.b.y };
+}
+
+juce::Point<float> SeedTree::sway (juce::Point<float> p) const
+{
+    float h = juce::jlimit (0.f, 1.f, (ground - p.y) / (0.55f * H));
+    h *= h;
+    const float s = std::sin (timeS * 0.9f + p.y * 0.02f) * 3.2f + std::sin (timeS * 2.1f + p.y * 0.05f) * 0.8f;
+    return { p.x + s * h, p.y };
+}
+
+void SeedTree::mouseDown (const juce::MouseEvent& e)
+{
+    const int z = zoneOfY (e.position.y);
     if (z != page) { page = z; if (onPage) onPage (z); }
     repaint();
 }
 
-void Helix::paint (juce::Graphics& g)
+void SeedTree::rebuild()
+{
+    segs.clear(); nodes.clear();
+    const float w = (float) getWidth();
+    if (w <= 0.f || getHeight() < 100) return;
+
+    H = (float) getHeight() - 44.f;
+    yA = topY + 0.34f * H;
+    ground = topY + 0.70f * H;
+    const float cx = w * 0.5f;
+    const float pi = juce::MathConstants<float>::pi;
+
+    seed::SplitMix r ((uint64_t) treeSeed * 0x9E3779B1ull + 0x7EEDull);
+    auto rnd = [&r] { return r.next(); };
+
+    std::function<juce::Point<float> (juce::Point<float>, float, float, int, int, float, bool, float)> grow;
+    grow = [&] (juce::Point<float> p, float ang, float len, int depth, int maxDepth, float thick, bool root, float t0) -> juce::Point<float>
+    {
+        // keep the branch inside the panel: mirror it back inward at the sides, shorten it at the top
+        float ex = p.x + std::sin (ang) * len;
+        if (ex < 14.f || ex > w - 14.f) { ang = -ang; ex = p.x + std::sin (ang) * len; }
+        float ey = p.y - std::cos (ang) * len;
+        if (ey < topY + 8.f && p.y - ey > 1.f)
+        {
+            const float f = std::max (0.15f, (p.y - (topY + 8.f)) / (p.y - ey));
+            ex = p.x + (ex - p.x) * f; ey = p.y + (ey - p.y) * f;
+        }
+        juce::Point<float> b { juce::jlimit (12.f, w - 12.f, ex), juce::jlimit (topY + 6.f, topY + H - 8.f, ey) };
+        const juce::Point<float> mid { (p.x + b.x) * 0.5f, (p.y + b.y) * 0.5f };
+        const float dx = b.x - p.x, dy = b.y - p.y, dist = std::max (1.f, std::sqrt (dx * dx + dy * dy));
+        const float bend = (rnd() - 0.5f) * 0.35f * len;
+        const juce::Point<float> c { mid.x - dy / dist * bend, mid.y + dx / dist * bend };
+
+        const float dur = 0.10f + 0.07f * (len / 100.f);
+        Seg sg { p, c, b, thick, t0, t0 + dur, 0, root };
+        sg.zone = zoneOfY (b.y);
+        segs.push_back (sg);
+
+        if (depth < maxDepth && len > 7.f)
+        {
+            const int n = rnd() < (root ? 0.22f : 0.38f) ? 3 : 2;
+            for (int k = 0; k < n; ++k)
+            {
+                float a2 = ang + ((float) k - (float) (n - 1) * 0.5f) * (0.5f + 0.4f * rnd()) + (rnd() - 0.5f) * 0.2f;
+                a2 = root ? pi + (a2 - pi) * 0.88f : a2 * 0.88f;
+                grow (b, a2, len * (0.7f + 0.14f * rnd()), depth + 1, maxDepth, std::max (0.9f, thick * 0.72f), root, t0 + dur - 0.01f);
+            }
+        }
+        return b;
+    };
+
+    // roots, growing down from the seed
+    const juce::Point<float> seedPos { cx, ground + 16.f };
+    const float rootAng[] = { -0.95f, -0.32f, 0.32f, 0.95f };
+    for (float a : rootAng)
+        grow (seedPos, pi + a + (rnd() - 0.5f) * 0.2f, 0.10f * H * (0.85f + 0.3f * rnd()), 1, 4, 3.4f, true, 0.02f);
+
+    // trunk with side branches (page II) and a crown (page III)
+    juce::Point<float> p { cx, ground };
+    float t0 = 0.f;
+    for (int i = 0; i < 5; ++i)
+    {
+        const float thick = 7.5f - 0.7f * (float) i;
+        p = grow (p, (rnd() - 0.5f) * 0.18f, 0.062f * H * (0.97f + 0.08f * rnd()), 99, 99, thick, false, t0);
+        t0 = segs.back().t1 - 0.01f;
+        if (i >= 1 && i <= 3)
+        {
+            const float side = (i % 2 ? 1.f : -1.f);
+            grow (p, side * (0.9f + 0.4f * rnd()), 0.13f * H * (0.9f + 0.3f * rnd()), 1, 4, thick * 0.7f, false, t0);
+        }
+    }
+    grow (p, (rnd() - 0.5f) * 0.2f, 0.13f * H, 1, 5, 4.2f, false, t0);
+
+    float maxT = 0.01f;
+    for (auto& s : segs) maxT = std::max (maxT, s.t1);
+    for (auto& s : segs) { s.t0 /= maxT; s.t1 /= maxT; }
+
+    // ---- one bulb per parameter, spread over the branches of its zone --------------------------
+    struct Cand { int seg; float u; juce::Point<float> pos; };
+    std::vector<Cand> cands[3];
+    for (int i = 0; i < (int) segs.size(); ++i)
+    {
+        if (segs[(size_t) i].thick > 5.2f) continue;                 // keep the trunk clear
+        for (float u : { 1.f, 0.62f, 0.3f })
+        {
+            const auto pos = bez (segs[(size_t) i], u);
+            cands[zoneOfY (pos.y)].push_back ({ i, u, pos });
+        }
+    }
+
+    for (int pg = 0; pg < 3; ++pg)
+    {
+        std::vector<int> params;
+        for (int i = 0; i < kNumParams; ++i) if (kParams[i].page == pg) params.push_back (i);
+
+        auto& c = cands[pg];
+        for (int i = (int) c.size() - 1; i > 0; --i)                // Fisher-Yates with the tree's own rng
+            std::swap (c[(size_t) i], c[(size_t) (rnd() * (float) (i + 1)) % (size_t) (i + 1)]);
+
+        std::vector<Cand> chosen;
+        std::vector<char> used (c.size(), 0);
+        for (float minD : { 11.f, 7.f, 3.f, 0.f })
+            for (size_t i = 0; i < c.size() && chosen.size() < params.size(); ++i)
+            {
+                if (used[i]) continue;
+                bool tooClose = false;
+                for (auto& o : chosen) if (o.pos.getDistanceFrom (c[i].pos) < minD) { tooClose = true; break; }
+                if (tooClose) continue;
+                used[i] = 1; chosen.push_back (c[i]);
+            }
+
+        std::sort (chosen.begin(), chosen.end(), [] (const Cand& a, const Cand& b)
+                   { return a.pos.y != b.pos.y ? a.pos.y < b.pos.y : a.pos.x < b.pos.x; });
+        for (size_t i = 0; i < chosen.size(); ++i)
+            nodes.push_back ({ chosen[i].seg, chosen[i].u, params[i], rnd() * 6.28f });
+    }
+    prog.assign (segs.size(), 0.f);
+}
+
+void SeedTree::paint (juce::Graphics& g)
 {
     using namespace ui;
     const float w = (float) getWidth();
-    const float top = 8.f, H = (float) getHeight() - 44.f, zoneH = H / 3.f;
-    const float cx = w * 0.5f, amp = w * 0.27f, period = H / 2.1f;
-    const float twoPi = juce::MathConstants<float>::twoPi;
+    if (segs.empty()) return;
+    const float cx = w * 0.5f, bottom = topY + H;
+    const float eg = 1.f - std::pow (1.f - growth, 3.f);
 
-    auto angleAt = [&] (float y) { return (y - top) / period * twoPi + phase; };
+    // soil: dim red glow + a perspective grid fading away from the horizon
+    g.setGradientFill (juce::ColourGradient (red.withAlpha (0.20f), cx, ground, red.withAlpha (0.f), cx, bottom, false));
+    g.fillRect (juce::Rectangle<float> (3.f, ground, w - 6.f, bottom - ground));
+    g.setColour (mist.withAlpha (0.10f));
+    for (int i = -6; i <= 6; ++i)
+        g.drawLine (cx, ground, cx + (float) i * 26.f, bottom, 1.f);
+    for (float d : { 7.f, 17.f, 31.f, 51.f, 78.f, 112.f, 156.f })
+        if (ground + d < bottom) g.drawLine (3.f, ground + d, w - 3.f, ground + d, 1.f);
+    g.setColour (red.withAlpha (0.35f));
+    g.drawLine (3.f, ground, w - 3.f, ground, 3.f);
+    g.setColour (red);
+    g.drawLine (3.f, ground, w - 3.f, ground, 1.2f);
 
-    auto strand = [&] (float sign, juce::Colour c, bool front)
+    // floating spores (the Upside Down)
+    for (int i = 0; i < 16; ++i)
     {
-        float px = 0.f, py = top;
-        bool have = false;
-        for (float y = top; y <= top + H; y += 3.f)
-        {
-            const float a = angleAt (y);
-            const float xx = cx + sign * amp * std::sin (a);
-            const float depth = sign * std::cos (a);          // > 0 = in front
-            if (have && ((depth > 0.f) == front))
-            {
-                g.setColour (c.withAlpha (front ? 1.f : 0.55f));
-                g.drawLine (px, py, xx, y, front ? 5.5f : 3.5f);
-            }
-            px = xx; py = y; have = true;
-        }
-    };
+        const float fx = std::fmod ((float) i * 0.618034f, 1.f);
+        const float x = 12.f + (w - 24.f) * fx + std::sin (timeS * 0.5f + (float) i) * 8.f;
+        const float y = bottom - std::fmod (timeS * (5.f + (float) (i % 5) * 2.f) + (float) i * 37.f, H * 0.95f);
+        const float a = 0.22f + 0.2f * std::sin (timeS * 1.3f + (float) i * 1.7f);
+        g.setColour (paper.withAlpha (a * 0.3f));
+        g.fillEllipse (x - 3.f, y - 3.f, 6.f, 6.f);
+        g.setColour (paper.withAlpha (a));
+        g.fillEllipse (x - 1.1f, y - 1.1f, 2.2f, 2.2f);
+    }
 
-    strand (1.f, red, false);
-    strand (-1.f, slate, false);
-
-    // rungs and beads
-    int start[3] = { 0, 0, 0 }, count[3] = { 0, 0, 0 };
-    for (int i = 0; i < kNumParams; ++i) { const int p = kParams[i].page; if (count[p] == 0) start[p] = i; ++count[p]; }
-
-    for (int p = 0; p < 3; ++p)
-        for (int j = 0; j < count[p]; ++j)
-        {
-            const float y = top + (float) p * zoneH + ((float) j + 0.5f) * zoneH / (float) count[p];
-            const float a = angleAt (y);
-            const float x1 = cx + amp * std::sin (a), x2 = cx - amp * std::sin (a);
-            g.setColour (slate.withAlpha (0.35f));
-            g.drawLine (x1, y, x2, y, 1.f);
-
-            const int idx = start[p] + j;
-            const float v = valueOf ? juce::jlimit (0.f, 1.f, valueOf (idx)) : 0.5f;
-            const float bx = x1 + (x2 - x1) * v;
-            g.setColour (paper);
-            g.fillEllipse (bx - 4.f, y - 4.f, 8.f, 8.f);
-            g.setColour (groupColour (kParams[idx].group));
-            g.drawEllipse (bx - 4.f, y - 4.f, 8.f, 8.f, 1.5f);
-        }
-
-    strand (1.f, red, true);
-    strand (-1.f, slate, true);
-
-    // page boxes + roman numerals
-    for (int p = 0; p < 3; ++p)
+    // branches
+    for (size_t i = 0; i < segs.size(); ++i)
     {
-        const juce::Rectangle<float> zone (3.f, top + (float) p * zoneH + 1.f, w - 6.f, zoneH - 2.f);
-        const bool active = p == page;
-        g.setColour (active ? ink : slate.withAlpha (0.5f));
+        const auto& s = segs[i];
+        const float p = juce::jlimit (0.f, 1.f, (eg - s.t0) / std::max (1e-3f, s.t1 - s.t0));
+        prog[i] = p;
+        if (p <= 0.f) continue;
+
+        juce::Path path;
+        const int steps = 8;
+        for (int k = 0; k <= steps; ++k)
+        {
+            const auto q = sway (bez (s, p * (float) k / (float) steps));
+            if (k == 0) path.startNewSubPath (q); else path.lineTo (q);
+        }
+        const bool act = s.zone == page;
+        const float dim = act ? 1.f : 0.5f;
+        const juce::Colour c = s.root ? red : (s.thick > 5.f ? mist.interpolatedWith (slate, 0.4f) : mist);
+        g.setColour (red.withAlpha (0.16f * dim));
+        g.strokePath (path, juce::PathStrokeType (s.thick + 5.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (c.withAlpha (0.35f + 0.6f * dim));
+        g.strokePath (path, juce::PathStrokeType (s.thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
+    // the seed, pulsing at the base of the trunk
+    {
+        const juce::Point<float> sp { cx, ground + 16.f };
+        const float pulse = 0.5f + 0.5f * std::sin (timeS * 2.2f);
+        g.setGradientFill (juce::ColourGradient (red.withAlpha (0.45f + 0.2f * pulse), sp.x, sp.y, red.withAlpha (0.f), sp.x, sp.y + 22.f, true));
+        g.fillEllipse (sp.x - 22.f, sp.y - 22.f, 44.f, 44.f);
+        juce::Path seedShape;
+        seedShape.addEllipse (-5.f, -7.5f, 10.f, 15.f);
+        const auto tf = juce::AffineTransform::rotation (0.45f).translated (sp.x, sp.y);
+        g.setColour (mist.interpolatedWith (slate, 0.25f));
+        g.fillPath (seedShape, tf);
+        g.setColour (paper);
+        g.strokePath (seedShape, juce::PathStrokeType (1.2f), tf);
+        g.setColour (ink);
+        juce::Path crack; crack.startNewSubPath (-1.f, -6.f); crack.lineTo (1.f, -1.f); crack.lineTo (-1.f, 3.f);
+        g.strokePath (crack, juce::PathStrokeType (1.f), tf);
+    }
+
+    // bulbs: size and glow follow the parameter value
+    for (const auto& n : nodes)
+    {
+        const float p = prog[(size_t) n.seg];
+        const float sc = juce::jlimit (0.f, 1.f, (p - n.u) / 0.15f + (n.u >= 0.99f ? 0.f : 0.f));
+        if (sc <= 0.f) continue;
+
+        const auto& s = segs[(size_t) n.seg];
+        const auto pos = sway (bez (s, n.u));
+        const float v = valueOf ? juce::jlimit (0.f, 1.f, valueOf (n.param)) : 0.5f;
+        const bool act = kParams[n.param].page == page;
+        const juce::Colour c = groupColour (kParams[n.param].group);
+        const float flick = 0.92f + 0.08f * std::sin (timeS * 17.f + n.phase);
+        const float dim = (act ? 1.f : 0.45f) * flick;
+        const float rad = (2.4f + 3.4f * v) * sc;
+
+        g.setGradientFill (juce::ColourGradient (c.withAlpha ((0.15f + 0.5f * v) * dim), pos.x, pos.y, c.withAlpha (0.f), pos.x + rad * 3.4f, pos.y, true));
+        g.fillEllipse (pos.x - rad * 3.4f, pos.y - rad * 3.4f, rad * 6.8f, rad * 6.8f);
+        g.setColour (ink);
+        g.fillEllipse (pos.x - rad - 1.2f, pos.y - rad - 1.2f, (rad + 1.2f) * 2.f, (rad + 1.2f) * 2.f);
+        g.setColour (c.interpolatedWith (paper, 0.5f * v).withAlpha (dim));
+        g.fillEllipse (pos.x - rad, pos.y - rad, rad * 2.f, rad * 2.f);
+    }
+
+    // page boxes + roman numerals (III on top, growing up from I in the soil)
+    const float zoneTop[3] = { ground, yA, topY };
+    const float zoneBot[3] = { bottom, ground, yA };
+    const char* roman[3] = { "I.", "II.", "III." };
+    for (int pg = 0; pg < 3; ++pg)
+    {
+        const juce::Rectangle<float> zone (3.f, zoneTop[pg] + 1.f, w - 6.f, zoneBot[pg] - zoneTop[pg] - 2.f);
+        const bool active = pg == page;
 
         juce::Path box; box.addRectangle (zone);
         juce::Path dashed;
         const float dashes[] = { 4.f, 3.f };
         juce::PathStrokeType (1.f).createDashedStroke (dashed, box, dashes, 2);
+        g.setColour (active ? red : slate.withAlpha (0.55f));
         g.fillPath (dashed);
 
-        g.setFont (serif (17.f, false, active));
-        g.setColour (active ? ink : slate);
-        g.drawText (kRoman[p], zone.getX() + 5.f, zone.getY() + 2.f, 40.f, 20.f, juce::Justification::topLeft);
+        auto label = juce::Rectangle<int> ((int) zone.getX() + 5, (int) zone.getY() + 2, 40, 20);
+        if (active) glowText (g, roman[pg], label, serif (17.f, false, true), red, juce::Justification::topLeft);
+        else { g.setFont (serif (17.f)); g.setColour (slate.brighter (0.2f)); g.drawText (roman[pg], label, juce::Justification::topLeft); }
     }
 
-    g.setFont (serif (12.f));
-    g.setColour (slate);
+    g.setFont (serif (12.f, true));
+    g.setColour (mist.withAlpha (0.7f));
     g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 30, getWidth(), 20, juce::Justification::centred);
+}
+
+//==============================================================================
+void Scanlines::paint (juce::Graphics& g)
+{
+    const auto b = getLocalBounds().toFloat();
+    g.setGradientFill (juce::ColourGradient (ui::ink.withAlpha (0.f), b.getCentreX(), b.getCentreY(),
+                                             ui::ink.withAlpha (0.6f), 0.f, 0.f, true));
+    g.fillRect (b);
+    g.setColour (juce::Colours::black.withAlpha (0.22f));
+    for (float y = 0.f; y < b.getHeight(); y += 3.f)
+        g.fillRect (0.f, y, b.getWidth(), 1.f);
 }
 
 //==============================================================================
@@ -367,11 +626,12 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     addFigure (2, { 190, 276, 480, 196 }, "3b", "Artificial reverberation", [this] (auto& g, auto r) { drawReverb (g, r); });
     addFigure (2, { 190, 484, 300, 66 },  "",   "",                        [this] (auto& g, auto r) { drawEq (g, r); });
 
-    // ---- helix -------------------------------------------------------------------
-    helix.valueOf = [this] (int idx) { return proc.getNormalised (idx); };
-    helix.caption = [this] { return proc.getSeed() > 0 ? "seed #" + juce::String (proc.getSeed()) : juce::String ("seed  -"); };
-    helix.onPage = [this] (int pg) { setPage (pg); };
-    addAndMakeVisible (helix);
+    // ---- seed tree -------------------------------------------------------------------
+    tree.valueOf = [this] (int idx) { return proc.getNormalised (idx); };
+    tree.caption = [this] { return proc.getSeed() > 0 ? "seed #" + juce::String (proc.getSeed()) : juce::String ("seed  -"); };
+    tree.onPage = [this] (int pg) { setPage (pg); };
+    addAndMakeVisible (tree);
+    tree.setSeed (proc.getSeed());
 
     // ---- bottom bar ----------------------------------------------------------------
     randomizeBtn.onClick = [this] { proc.randomizeNew(); refreshLabels(); };
@@ -385,6 +645,7 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
 
     seedBox.setInputRestrictions (9, "0123456789");
     seedBox.setFont (ui::serif (14.f));
+    seedBox.setColour (juce::TextEditor::backgroundColourId, ui::ink);
     seedBox.setJustification (juce::Justification::centred);
     seedBox.setTooltip ("Seed of the current random patch. Type a seed and press Return to recall it.");
     seedBox.onReturnKey = [this]
@@ -408,6 +669,7 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
                                                               &seedBox, &chaosSlider, &autoTuneBtn, &presetLabel })
         addAndMakeVisible (c);
 
+    addAndMakeVisible (scan);   // on top of everything
     resized();      // setSize() ran before the knobs/figures existed, so lay everything out now
     refreshLabels();
     setPage (0);
@@ -430,7 +692,7 @@ void SeedEditor::addFigure (int pg, juce::Rectangle<int> rect, const juce::Strin
 void SeedEditor::setPage (int newPage)
 {
     page = newPage;
-    helix.page = newPage;
+    tree.page = newPage;
     for (auto& k : knobs) k->setVisible (kParams[k->paramIndex].page == page);
     for (auto& f : figures) f.comp->setVisible (f.page == page);
     repaint();
@@ -438,7 +700,8 @@ void SeedEditor::setPage (int newPage)
 
 void SeedEditor::resized()
 {
-    helix.setBounds (8, 8, 164, 624);
+    tree.setBounds (8, 8, 164, 624);
+    scan.setBounds (getLocalBounds());
 
     for (auto& k : knobs)
     {
@@ -486,6 +749,7 @@ void SeedEditor::timerCallback()
         dv = makeDerived (vals);
         for (auto& f : figures) if (f.page == page) f.comp->repaint();
     }
+    tree.setSeed (proc.getSeed());
     if (proc.getSeed() != lastSeedShown || proc.getPresetName() != lastPresetShown) refreshLabels();
 }
 
@@ -524,20 +788,39 @@ void SeedEditor::loadPresetDialog()
 void SeedEditor::paint (juce::Graphics& g)
 {
     using namespace ui;
-    g.fillAll (paper);
+    g.fillAll (ink);
+    g.setGradientFill (juce::ColourGradient (ink.interpolatedWith (slate, 0.22f), (float) kWidth * 0.62f, 300.f,
+                                             ink, 0.f, 0.f, true));
+    g.fillRect (getLocalBounds());
 
     // panel behind the content
-    g.setColour (mist.withAlpha (0.22f));
-    g.fillRoundedRectangle (178.f, 6.f, (float) kWidth - 190.f, 626.f, 6.f);
+    const juce::Rectangle<float> panel (178.f, 6.f, (float) kWidth - 190.f, 626.f);
+    g.setColour (ink.interpolatedWith (slate, 0.12f));
+    g.fillRoundedRectangle (panel, 6.f);
+    g.setColour (slate.withAlpha (0.55f));
+    g.drawRoundedRectangle (panel.reduced (0.5f), 6.f, 1.f);
 
-    g.setColour (ink);
-    g.setFont (serif (26.f, false, true));
-    g.drawText (juce::String (kRoman[page]) + "   " + kPageTitles[page], kContentX, 10, 480, 36, juce::Justification::centred);
+    // neon page title between two thin red rules
+    const juce::String title = (juce::String (kRoman[page]) + "   " + kPageTitles[page]).toUpperCase();
+    glowText (g, title, { kContentX, 10, 480, 36 }, serif (25.f, false, true).withExtraKerningFactor (0.14f), red, juce::Justification::centred);
+    for (float y : { 9.f, 47.f })
+    {
+        g.setColour (red.withAlpha (0.3f));
+        g.drawLine (230.f, y, 630.f, y, 3.f);
+        g.setColour (red);
+        g.drawLine (230.f, y, 630.f, y, 1.f);
+    }
+
+    // wordmark
+    glowText (g, "SEEDLING", { 690, 8, 184, 26 }, serif (20.f, false, true).withExtraKerningFactor (0.2f), red, juce::Justification::centredRight);
+    g.setFont (serif (11.f, true));
+    g.setColour (mist.withAlpha (0.6f));
+    g.drawText ("random patch synthesiser", 690, 31, 184, 14, juce::Justification::centredRight);
 
     // signal-flow arrows on the oscillator page
     if (page == 1)
     {
-        g.setColour (slate);
+        g.setColour (mist.withAlpha (0.55f));
         const float ox = (float) kContentX, oy = (float) kContentY;
 
         g.drawLine (ox + 576.f, oy + 136.f, ox + 576.f, oy + 192.f, 1.3f);
@@ -553,9 +836,11 @@ void SeedEditor::paint (juce::Graphics& g)
     }
 
     // bottom bar
-    g.setColour (mist);
+    g.setColour (red.withAlpha (0.25f));
+    g.drawLine (14.f, 640.f, (float) kWidth - 10.f, 640.f, 3.f);
+    g.setColour (red.withAlpha (0.8f));
     g.drawLine (14.f, 640.f, (float) kWidth - 10.f, 640.f, 1.f);
-    g.setColour (slate);
+    g.setColour (mist.withAlpha (0.7f));
     g.setFont (serif (13.f, true));
     g.drawText ("soft", softLabelRect, juce::Justification::centredRight);
     g.drawText ("wild", wildLabelRect, juce::Justification::centredLeft);
@@ -630,7 +915,7 @@ void SeedEditor::drawVibrato (juce::Graphics& g, juce::Rectangle<float> r)
         const float v = d.vibSemis * std::sin (kTwoPi * d.lfoHz * t) * ramp;     // -1..1 semitone
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getCentreY() - v * r.getHeight() * 0.45f });
     }
-    strokeCurve (g, pts, ui::slate, false, 0.f, 1.6f);
+    strokeCurve (g, pts, ui::mist, false, 0.f, 1.6f);
 }
 
 void SeedEditor::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
@@ -647,7 +932,7 @@ void SeedEditor::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
         const float gain = 1.f - d.tremDepth * 0.5f * (1.f - lfo);               // 1-depth .. 1
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getBottom() - gain * r.getHeight() * 0.9f });
     }
-    strokeCurve (g, pts, ui::slate, true, r.getBottom(), 1.6f);
+    strokeCurve (g, pts, ui::mist, true, r.getBottom(), 1.6f);
 }
 
 void SeedEditor::drawOsc (juce::Graphics& g, juce::Rectangle<float> r, bool isB)
@@ -728,7 +1013,7 @@ void SeedEditor::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
     const int bars = std::max (30, (int) (r.getWidth() / 3.5f));
 
     std::vector<juce::Point<float>> env;
-    g.setColour (ui::slate.withAlpha (0.8f));
+    g.setColour (ui::mist.withAlpha (0.55f));
     for (int k = 0; k < bars; ++k)
     {
         const float t = T * (float) k / (float) bars;

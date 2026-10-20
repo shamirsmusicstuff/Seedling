@@ -66,13 +66,19 @@ private:
 };
 
 //==============================================================================
-// The DNA helix page selector. Every rung is one parameter; the bead on the rung shows its value.
-class Helix : public juce::Component, private juce::Timer
+// Page selector: a tree grown from a seed. Roots = I (envelope + LFO), trunk and low branches = II
+// (oscillators), canopy = III (filter + effects). Every parameter is a glowing bulb on the tree whose
+// size / brightness shows its value. Each seed grows its own tree (and it regrows when the seed changes).
+class SeedTree : public juce::Component, private juce::Timer
 {
 public:
-    Helix();
+    SeedTree();
     void paint (juce::Graphics&) override;
+    void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+
+    void setSeed (uint32_t s);
+    void skipGrowth (float g = 1.f) { growth = g; }
 
     int page = 0;
     std::function<void (int)> onPage;
@@ -80,8 +86,29 @@ public:
     std::function<juce::String()> caption;
 
 private:
+    struct Seg  { juce::Point<float> a, c, b; float thick, t0, t1; int zone; bool root; };
+    struct Node { int seg; float u; int param; float phase; };
+
     void timerCallback() override;
-    float phase = 0.f;
+    void rebuild();
+    juce::Point<float> bez (const Seg&, float u) const;
+    juce::Point<float> sway (juce::Point<float>) const;
+    int zoneOfY (float y) const;
+
+    std::vector<Seg> segs;
+    std::vector<Node> nodes;
+    std::vector<float> prog;
+    uint32_t rawSeed = 0xffffffffu, treeSeed = 29;
+    float growth = 0.f, timeS = 0.f;
+    float topY = 8.f, H = 0.f, yA = 0.f, ground = 0.f;
+};
+
+// CRT scanlines + vignette laid over the whole editor (never takes mouse clicks).
+class Scanlines : public juce::Component
+{
+public:
+    Scanlines() { setInterceptsMouseClicks (false, false); setBufferedToImage (true); }
+    void paint (juce::Graphics&) override;
 };
 
 //==============================================================================
@@ -94,6 +121,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void showPageForTest (int p) { setPage (p); }
+    void setGrowthForTest (float g) { tree.skipGrowth (g); }
+    void syncForTest() { timerCallback(); }
 
 private:
     void timerCallback() override;
@@ -131,7 +160,8 @@ private:
     float lastVals[seed::kNumParams] {};
     seed::Derived dv {};
 
-    Helix helix;
+    SeedTree tree;
+    Scanlines scan;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<FigureEntry> figures;
 
