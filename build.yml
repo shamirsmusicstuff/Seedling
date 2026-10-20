@@ -1,0 +1,26 @@
+name: Build Seedling
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (JUCE 8.0.4 is downloaded automatically)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"   # universal: Apple Silicon + Intel
+          else
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+          fi
+      - name: Build
+        run: cmake --build build --config Release --target Seedling_VST3 -j 4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Seedling-${{ matrix.os }}
+          path: build/Seedling_artefacts/Release/VST3/Seedling.vst3
