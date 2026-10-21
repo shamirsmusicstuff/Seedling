@@ -49,9 +49,14 @@ public:
     void resized() override;
 
     const int paramIndex;
+    std::function<void (int, float)> onInteract;     // (parameter, 0 = idle / 0.5 = hover / 1 = dragging)
+    void mouseEnter (const juce::MouseEvent&) override { if (! dragging) notify (0.5f); }
+    void mouseExit  (const juce::MouseEvent&) override { if (! dragging) notify (0.f); }
 
 private:
     juce::Slider slider;
+    bool dragging = false;
+    void notify (float l) { if (onInteract) onInteract (paramIndex, l); }
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 };
 
@@ -86,6 +91,11 @@ public:
     void setSeed (uint32_t s);
     void skipGrowth (float g = 1.f) { growth = g; }
     void setSpin (float radians) { spin = radians; }
+    void setHome (bool b) { home = b; repaint(); }     // home view: the big spinning tree with its beat ring, no page boxes
+
+    // The branch carrying a parameter lights up while you hover (0.5) or drag (1) its control, and flashes when the value changes.
+    void setInteraction (int param, float level) { if (param >= 0 && param < seed::kNumParams) interact[param] = level; }
+    void settle();      // jump the animated state to its targets (used by the snapshot test)
 
     int page = 0;
     std::function<void (int)> onPage;
@@ -97,7 +107,7 @@ public:
 
 private:
     struct V3 { float x = 0.f, y = 0.f, z = 0.f; };
-    struct Seg  { V3 a, c, b; float thick, t0, t1; int zone; bool root; };
+    struct Seg  { V3 a, c, b; float thick, t0, t1; int zone; bool root; int parent; };
     struct Node { int seg; float u; int param; float phase; };
     struct Item { float depth; int kind; int idx; };   // kind 0 = branch, 1 = bulb, 2 = the seed
 
@@ -113,6 +123,12 @@ private:
     std::vector<Node> nodes;
     std::vector<float> prog;
     std::vector<Item> items;
+    std::vector<Seg> dsegs;                       // branches as drawn: base shape + the value-driven extend / recline
+    std::vector<V3> cum;                          // accumulated tip displacement along each branch's ancestry
+    std::vector<float> nodeV, segVal, segHL;      // eased bulb values, per-branch mean value, per-branch highlight
+    std::vector<int> segCnt;
+    float interact[seed::kNumParams] = {}, hl[seed::kNumParams] = {}, flash[seed::kNumParams] = {}, prevV[seed::kNumParams] = {};
+    bool havePrev = false, home = false;
     uint32_t rawSeed = 0xffffffffu, treeSeed = 29;
     float growth = 0.f, timeS = 0.f, spin = 0.f;
     float topY = 8.f, H = 0.f, yA = 0.f, ground = 0.f, rMax = 60.f;
@@ -135,15 +151,19 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
-    void showPageForTest (int p) { setPage (p); }
-    void setGrowthForTest (float g) { tree.skipGrowth (g); }
-    void setSpinForTest (float r) { tree.setSpin (r); }
-    void setSkinForTest (const seed::Skin& k) { ui::apply (k); lnf.applyPalette(); sendLookAndFeelChange(); scan.repaint(); repaint(); }
+    void showPageForTest (int p) { setHomeView (false); setPage (p); }
+    void setGrowthForTest (float g) { tree.skipGrowth (g); homeTree.skipGrowth (g); }
+    void interactForTest (int param, float level) { tree.setInteraction (param, level); tree.settle(); homeTree.setInteraction (param, level); homeTree.settle(); }
+    void setSpinForTest (float r) { tree.setSpin (r); homeTree.setSpin (r); }
+    void showHomeForTest (bool h) { setHomeView (h); }
+    bool isHomeView() const { return homeView; }
+    void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinBtn.setButtonText ("skin: " + k.name); lnf.applyPalette(); sendLookAndFeelChange(); scan.repaint(); repaint(); }
     void syncForTest() { timerCallback(); }
 
 private:
     void timerCallback() override;
     void setPage (int newPage);
+    void setHomeView (bool home);
     void refreshLabels();
     void loadSkins();
     void chooseSkin (const juce::String& name);
@@ -180,7 +200,9 @@ private:
     float lastVals[seed::kNumParams] {};
     seed::Derived dv {};
 
-    SeedTree tree;
+    SeedTree tree, homeTree;
+    bool homeView = true;
+    juce::TextButton editBtn { "EDIT SOUND" }, homeBtn { "< tree" };
     Scanlines scan;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<FigureEntry> figures;

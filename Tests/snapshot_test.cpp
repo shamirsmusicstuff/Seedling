@@ -235,6 +235,94 @@ int main (int argc, char** argv)
         }
     }
 
+    // --- branches follow the values; the one being edited lights up ---------------------------------
+    {
+        using namespace seed;
+        editor->setGrowthForTest (1.f);
+        editor->showPageForTest (1);
+        editor->setSpinForTest (0.6f);
+        auto strip = [&] (const char* name)
+        {
+            auto img = editor->createComponentSnapshot (editor->getLocalBounds().removeFromLeft (180), true, 1.0f);
+            const auto png = outDir.getChildFile (name);
+            png.deleteFile();
+            juce::FileOutputStream fo (png);
+            juce::PNGImageFormat().writeImageToStream (img, fo);
+            return img;
+        };
+        auto diffPixels = [] (const juce::Image& a, const juce::Image& b)
+        {
+            int n = 0;
+            for (int y = 0; y < a.getHeight(); ++y)
+                for (int x = 0; x < a.getWidth(); ++x)
+                    if (a.getPixelAt (x, y).getARGB() != b.getPixelAt (x, y).getARGB()) ++n;
+            return n;
+        };
+        auto setPage2 = [&] (float level)
+        {
+            for (int i = 0; i < kNumParams; ++i)
+                if (kParams[i].page == 1 && ! (kParams[i].flags & fSwitch))
+                    proc.setReal (i, kParams[i].lo + (kParams[i].hi - kParams[i].lo) * level);
+            editor->interactForTest (-1, 0.f);       // settle the eased values
+        };
+
+        setPage2 (0.f);  const auto low  = strip ("branch_low.png");
+        setPage2 (1.f);  const auto high = strip ("branch_high.png");
+        setPage2 (0.7f); const auto base = strip ("branch_plain.png");
+        editor->interactForTest (b_form, 1.f);
+        const auto lit = strip ("branch_highlight.png");
+        const int dLowHigh = diffPixels (low, high), dLit = diffPixels (base, lit);
+        std::printf ("branches: low-vs-high differ in %d px, highlight changes %d px\n", dLowHigh, dLit);
+        CHECK (dLowHigh > 2000, "branches do not respond to the values (%d px)", dLowHigh);
+        CHECK (dLit > 300, "highlight not visible (%d px)", dLit);
+        editor->interactForTest (b_form, 0.f);
+        CHECK (diffPixels (base, strip ("branch_plain2.png")) == 0, "highlight did not switch off again");
+    }
+
+    // --- the two views, in every built-in skin (these are the README screenshots) ----------------------------
+    {
+        using namespace seed;
+        std::unique_ptr<juce::AudioProcessorEditor> fresh (proc.createEditor());
+        auto* fe = dynamic_cast<SeedEditor*> (fresh.get());
+        CHECK (fe->isHomeView(), "the editor must open on the home view (spinning tree)");
+        fresh.reset();
+
+        proc.randomize (29);
+        editor->syncForTest();
+        editor->setGrowthForTest (1.f);
+        editor->setSpinForTest (0.9f);
+        editor->interactForTest (-1, 0.f);
+        const auto dir = outDir.getChildFile ("readme");
+        dir.createDirectory();
+        auto save = [] (const juce::Image& img, const juce::File& f)
+        {
+            f.deleteFile();
+            juce::FileOutputStream fo (f);
+            juce::PNGImageFormat().writeImageToStream (img, fo);
+        };
+        juce::Image homeFirst;
+        for (auto& sk : skins::builtins())
+        {
+            const auto n = sk.name.replaceCharacter (' ', '_');
+            editor->setSkinForTest (sk);
+            editor->showHomeForTest (true);
+            auto home = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            save (home, dir.getChildFile ("home_" + n + ".png"));
+            editor->showPageForTest (1);
+            auto edit = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            save (edit, dir.getChildFile ("edit_" + n + ".png"));
+            if (! homeFirst.isValid()) homeFirst = home;
+            int d = 0;
+            for (int y = 0; y < home.getHeight(); y += 3)
+                for (int x = 0; x < home.getWidth(); x += 3)
+                    if (home.getPixelAt (x, y) != edit.getPixelAt (x, y)) ++d;
+            CHECK (d > 3000, "home and edit views look the same in skin %s", sk.name.toRawUTF8());
+        }
+        editor->showHomeForTest (true);
+        editor->setSkinForTest (skins::builtins().front());
+        std::printf ("wrote README screenshots to %s\n", dir.getFullPathName().toRawUTF8());
+    }
+
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);
     ed.reset();
     return failures == 0 ? 0 : 1;

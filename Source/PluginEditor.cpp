@@ -251,6 +251,10 @@ Knob::Knob (juce::AudioProcessorValueTreeState& apvts, int index) : paramIndex (
     slider.getProperties().set ("bipolar", (d.flags & fBipolar) != 0);
     addAndMakeVisible (slider);
 
+    slider.onDragStart = [this] { dragging = true; notify (1.f); };
+    slider.onDragEnd   = [this] { dragging = false; notify (slider.isMouseOver (true) ? 0.5f : 0.f); };
+    slider.addMouseListener (this, false);          // so hovering the dial reaches mouseEnter / mouseExit above
+
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, d.id, slider);
     slider.setDoubleClickReturnValue (true, d.def);
 }
@@ -316,6 +320,25 @@ void SeedTree::timerCallback()
     timeS += dt;
     if (growth < 1.f) growth = std::min (1.f, growth + dt / 2.8f);
 
+    // bulb values ease towards the knobs (so branches grow / recline smoothly); a changed value flashes its branch
+    if (valueOf)
+    {
+        for (size_t i = 0; i < nodes.size(); ++i)
+        {
+            const float v = juce::jlimit (0.f, 1.f, valueOf (nodes[i].param));
+            nodeV[i] = nodeV[i] < 0.f ? v : nodeV[i] + (v - nodeV[i]) * 0.3f;
+        }
+        for (int i = 0; i < seed::kNumParams; ++i)
+        {
+            const float v = valueOf (i);
+            if (havePrev && growth >= 1.f && std::abs (v - prevV[i]) > 0.002f) flash[i] = 1.f;
+            prevV[i] = v;
+            flash[i] *= 0.9f;
+            hl[i] += (interact[i] - hl[i]) * 0.35f;
+        }
+        havePrev = true;
+    }
+
     // spin: one turn every kBeatsPerRev beats of the host tempo (120 bpm when there is no host)
     const HostInfo h = hostInfo ? hostInfo() : HostInfo {};
     const double bpm = h.bpm > 20.0 ? h.bpm : 120.0;
@@ -330,6 +353,13 @@ void SeedTree::timerCallback()
     }
     spin = std::fmod (spin + twoPi, twoPi);
     repaint();
+}
+
+void SeedTree::settle()
+{
+    for (size_t i = 0; i < nodes.size(); ++i)
+        if (valueOf) nodeV[i] = juce::jlimit (0.f, 1.f, valueOf (nodes[i].param));
+    for (int i = 0; i < seed::kNumParams; ++i) hl[i] = interact[i];
 }
 
 void SeedTree::setSeed (uint32_t s)
@@ -372,6 +402,7 @@ juce::Point<float> SeedTree::project (V3 p, float& depth, float& scale) const
 
 void SeedTree::mouseDown (const juce::MouseEvent& e)
 {
+    if (home) return;
     const int z = zoneOfY (e.position.y);
     if (z != page) { page = z; if (onPage) onPage (z); }
     repaint();
@@ -398,8 +429,8 @@ void SeedTree::rebuild()
     auto norm  = [] (V3 a) { const float l = std::max (1e-5f, std::sqrt (a.x * a.x + a.y * a.y + a.z * a.z)); return V3 { a.x / l, a.y / l, a.z / l }; };
 
     // y grows downward (like the screen): "up" is -y
-    std::function<V3 (V3, V3, float, int, int, float, bool, float)> grow;
-    grow = [&] (V3 p, V3 dir, float len, int depth, int maxDepth, float thick, bool root, float t0) -> V3
+    std::function<V3 (V3, V3, float, int, int, float, bool, float, int)> grow;
+    grow = [&] (V3 p, V3 dir, float len, int depth, int maxDepth, float thick, bool root, float t0, int parent) -> V3
     {
         V3 b = add (p, mul (dir, len));
         const float rr = std::sqrt (b.x * b.x + b.z * b.z);
@@ -416,7 +447,8 @@ void SeedTree::rebuild()
         const V3 c = add (mid, mul (side, (rnd() - 0.5f) * 0.35f * len));
 
         const float dur = 0.10f + 0.07f * (len / 100.f);
-        Seg sg { p, c, b, thick, t0, t0 + dur, 0, root };
+        const int me = (int) segs.size();
+        Seg sg { p, c, b, thick, t0, t0 + dur, 0, root, parent };
         sg.zone = zoneOfY (b.y);
         segs.push_back (sg);
 
@@ -432,7 +464,7 @@ void SeedTree::rebuild()
                 const float spread = 0.5f + 0.4f * rnd();
                 V3 cd = add (mul (dir, std::cos (spread)), mul (add (mul (u, std::cos (phi)), mul (v, std::sin (phi))), std::sin (spread)));
                 cd = norm (add (cd, V3 { 0.f, root ? 0.22f : -0.25f, 0.f }));    // roots sink, branches reach for the light
-                grow (b, cd, len * (0.7f + 0.14f * rnd()), depth + 1, maxDepth, std::max (0.9f, thick * 0.72f), root, t0 + dur - 0.01f);
+                grow (b, cd, len * (0.7f + 0.14f * rnd()), depth + 1, maxDepth, std::max (0.9f, thick * 0.72f), root, t0 + dur - 0.01f, me);
             }
         }
         return b;
@@ -444,25 +476,27 @@ void SeedTree::rebuild()
     {
         const float phi = (float) k * 2.f * pi / 5.f + rnd() * 0.5f, t = 0.8f + 0.5f * rnd();
         grow (seedPos, norm (V3 { std::sin (t) * std::cos (phi), std::cos (t), std::sin (t) * std::sin (phi) }),
-              0.10f * H * (0.85f + 0.3f * rnd()), 1, 4, 3.4f, true, 0.02f);
+              0.10f * H * (0.85f + 0.3f * rnd()), 1, 4, 3.4f, true, 0.02f, -1);
     }
 
     // trunk with spiralling side branches (page II) and a crown (page III)
     V3 p { 0.f, ground, 0.f };
     float t0 = 0.f;
+    int trunkParent = -1;
     for (int i = 0; i < 5; ++i)
     {
         const float thick = 7.5f - 0.7f * (float) i;
-        p = grow (p, norm (V3 { (rnd() - 0.5f) * 0.2f, -1.f, (rnd() - 0.5f) * 0.2f }), 0.062f * H * (0.97f + 0.08f * rnd()), 99, 99, thick, false, t0);
+        p = grow (p, norm (V3 { (rnd() - 0.5f) * 0.2f, -1.f, (rnd() - 0.5f) * 0.2f }), 0.062f * H * (0.97f + 0.08f * rnd()), 99, 99, thick, false, t0, trunkParent);
         t0 = segs.back().t1 - 0.01f;
+        trunkParent = (int) segs.size() - 1;
         if (i >= 1 && i <= 3)
         {
             const float phi = (float) i * 2.4f + rnd() * 0.5f, t = 0.9f + 0.4f * rnd();
             grow (p, norm (V3 { std::sin (t) * std::cos (phi), -std::cos (t), std::sin (t) * std::sin (phi) }),
-                  0.13f * H * (0.9f + 0.3f * rnd()), 1, 4, thick * 0.7f, false, t0);
+                  0.13f * H * (0.9f + 0.3f * rnd()), 1, 4, thick * 0.7f, false, t0, trunkParent);
         }
     }
-    grow (p, norm (V3 { (rnd() - 0.5f) * 0.2f, -1.f, (rnd() - 0.5f) * 0.2f }), 0.13f * H, 1, 5, 4.2f, false, t0);
+    grow (p, norm (V3 { (rnd() - 0.5f) * 0.2f, -1.f, (rnd() - 0.5f) * 0.2f }), 0.13f * H, 1, 5, 4.2f, false, t0, trunkParent);
 
     float maxT = 0.01f;
     for (auto& s : segs) maxT = std::max (maxT, s.t1);
@@ -509,6 +543,9 @@ void SeedTree::rebuild()
             nodes.push_back ({ chosen[i].seg, chosen[i].u, params[i], rnd() * 6.28f });
     }
     prog.assign (segs.size(), 0.f);
+    dsegs = segs;
+    nodeV.assign (nodes.size(), -1.f);
+    havePrev = false;
 }
 
 void SeedTree::paint (juce::Graphics& g)
@@ -547,6 +584,36 @@ void SeedTree::paint (juce::Graphics& g)
         }
     }
 
+    // home view: a ring of 32 beat ticks around the tree (a bar every 4) that turns with it; the bright bead marks beat 1
+    if (home)
+    {
+        float d, sc;
+        const float R = rMax * 3.8f, twoPi = juce::MathConstants<float>::twoPi;
+        juce::Path ring;
+        for (int k = 0; k <= 96; ++k)
+        {
+            const auto q = project ({ std::cos ((float) k / 96.f * twoPi) * R, ground, std::sin ((float) k / 96.f * twoPi) * R }, d, sc);
+            if (k == 0) ring.startNewSubPath (q); else ring.lineTo (q);
+        }
+        g.setColour (red.withAlpha (0.25f));
+        g.strokePath (ring, juce::PathStrokeType (4.f));
+        g.setColour (red.withAlpha (0.85f));
+        g.strokePath (ring, juce::PathStrokeType (1.2f));
+        for (int k = 0; k < 32; ++k)
+        {
+            const float a = (float) k / 32.f * twoPi, bar = k % 4 == 0 ? 1.f : 0.f;
+            const auto p0 = project ({ std::cos (a) * R, ground, std::sin (a) * R }, d, sc);
+            const auto p1 = project ({ std::cos (a) * R * (1.f + 0.05f + 0.04f * bar), ground, std::sin (a) * R * (1.f + 0.05f + 0.04f * bar) }, d, sc);
+            g.setColour (mist.withAlpha (0.35f + 0.4f * bar));
+            g.drawLine (juce::Line<float> (p0, p1), 1.f + bar);
+        }
+        const auto bead = project ({ R, ground, 0.f }, d, sc);
+        g.setColour (red.withAlpha (0.35f));
+        g.fillEllipse (bead.x - 9.f, bead.y - 9.f, 18.f, 18.f);
+        g.setColour (paper);
+        g.fillEllipse (bead.x - 3.5f, bead.y - 3.5f, 7.f, 7.f);
+    }
+
     // floating spores (the Upside Down)
     for (int i = 0; i < 16; ++i)
     {
@@ -560,6 +627,46 @@ void SeedTree::paint (juce::Graphics& g)
         g.fillEllipse (x - 1.1f, y - 1.1f, 2.2f, 2.2f);
     }
 
+    // The branch that carries a parameter follows its value: low = shorter and reclined (drooping), high = longer and lifted.
+    // Whatever grows beyond it moves with it, so a long chain of twigs swings as one.
+    {
+        const size_t ns = segs.size();
+        dsegs.resize (ns);
+        cum.assign (ns, V3 {});
+        segVal.assign (ns, 0.f); segCnt.assign (ns, 0); segHL.assign (ns, 0.f);
+        for (size_t i = 0; i < nodes.size(); ++i)
+        {
+            const auto& n = nodes[i];
+            segVal[(size_t) n.seg] += nodeV[i] < 0.f ? 0.5f : nodeV[i];
+            ++segCnt[(size_t) n.seg];
+            segHL[(size_t) n.seg] = std::max (segHL[(size_t) n.seg], std::max (hl[n.param], flash[n.param]));
+        }
+        const float gk = juce::jlimit (0.f, 1.f, (growth - 0.6f) / 0.4f);      // eases in once the tree is grown
+        for (size_t i = 0; i < ns; ++i)
+        {
+            const Seg& s = segs[i];
+            const V3 pc = s.parent >= 0 ? cum[(size_t) s.parent] : V3 {};
+            V3 d;
+            if (segCnt[i] > 0 && gk > 0.f)
+            {
+                const float v = segVal[i] / (float) segCnt[i];
+                const V3 dir { s.b.x - s.a.x, s.b.y - s.a.y, s.b.z - s.a.z };
+                const float len = std::max (1e-3f, std::sqrt (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z));
+                const float stretch = (0.78f + 0.44f * v - 1.f) * gk;            // 0.78x .. 1.22x
+                const float lift = (v - 0.5f) * 0.6f * len * gk;                 // + = up (y points down on screen)
+                d = { dir.x * stretch, dir.y * stretch - lift, dir.z * stretch };
+            }
+            cum[i] = { pc.x + d.x, pc.y + d.y, pc.z + d.z };
+            dsegs[i] = s;
+            dsegs[i].a = { s.a.x + pc.x, s.a.y + pc.y, s.a.z + pc.z };
+            dsegs[i].c = { s.c.x + pc.x + 0.5f * d.x, s.c.y + pc.y + 0.5f * d.y, s.c.z + pc.z + 0.5f * d.z };
+            dsegs[i].b = { s.b.x + cum[i].x, s.b.y + cum[i].y, s.b.z + cum[i].z };
+        }
+        for (size_t i = ns; i-- > 0;)                                           // light the path back down to the seed
+            if (segs[i].parent >= 0)
+                segHL[(size_t) segs[i].parent] = std::max (segHL[(size_t) segs[i].parent], segHL[i] * 0.6f);
+    }
+
     // everything solid goes into one list and is painted far to near
     items.clear();
     for (size_t i = 0; i < segs.size(); ++i)
@@ -569,7 +676,7 @@ void SeedTree::paint (juce::Graphics& g)
         prog[i] = p;
         if (p <= 0.f) continue;
         float d, sc;
-        project (bez (s, p * 0.5f), d, sc);
+        project (bez (dsegs[i], p * 0.5f), d, sc);
         items.push_back ({ d, 0, (int) i });
     }
     for (size_t i = 0; i < nodes.size(); ++i)
@@ -577,7 +684,7 @@ void SeedTree::paint (juce::Graphics& g)
         const auto& n = nodes[i];
         if (prog[(size_t) n.seg] - n.u <= 0.f) continue;
         float d, sc;
-        project (bez (segs[(size_t) n.seg], n.u), d, sc);
+        project (bez (dsegs[(size_t) n.seg], n.u), d, sc);
         items.push_back ({ d - 0.5f, 1, (int) i });
     }
     items.push_back ({ 0.f, 2, 0 });
@@ -593,17 +700,23 @@ void SeedTree::paint (juce::Graphics& g)
             float d = 0.f, sc = 1.f, dm = 0.f, scm = 1.f;
             for (int k = 0; k <= 8; ++k)
             {
-                const auto q = project (bez (s, p * (float) k / 8.f), d, sc);
+                const auto q = project (bez (dsegs[(size_t) it.idx], p * (float) k / 8.f), d, sc);
                 if (k == 4) { dm = d; scm = sc; }
                 if (k == 0) path.startNewSubPath (q); else path.lineTo (q);
             }
             const float depthK = 0.45f + 0.55f * juce::jlimit (0.f, 1.f, 0.5f - dm * nearK);   // far side fades
-            const float dim = (s.zone == page ? 1.f : 0.5f) * depthK;
+            const float dim = (home || s.zone == page ? 1.f : 0.5f) * depthK;
             const float th = s.thick * scm;
             const juce::Colour c = s.root ? red : (s.thick > 5.f ? mist.interpolatedWith (slate, 0.4f) : mist);
+            const float hv = segHL[(size_t) it.idx];
             g.setColour (red.withAlpha (0.16f * dim));
             g.strokePath (path, juce::PathStrokeType (th + 5.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour (c.withAlpha (0.3f + 0.65f * dim));
+            if (hv > 0.02f)                                        // being edited: neon glow, brighter core
+            {
+                g.setColour (red.withAlpha (0.5f * hv));
+                g.strokePath (path, juce::PathStrokeType (th + 10.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+            g.setColour (c.interpolatedWith (paper, 0.6f * hv).withAlpha (juce::jlimit (0.f, 1.f, 0.3f + 0.65f * dim + 0.5f * hv)));
             g.strokePath (path, juce::PathStrokeType (th, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         else if (it.kind == 1)
@@ -611,14 +724,15 @@ void SeedTree::paint (juce::Graphics& g)
             const auto& n = nodes[(size_t) it.idx];
             const float sg = juce::jlimit (0.f, 1.f, (prog[(size_t) n.seg] - n.u) / 0.15f);
             float d, sc;
-            const auto pos = project (bez (segs[(size_t) n.seg], n.u), d, sc);
+            const auto pos = project (bez (dsegs[(size_t) n.seg], n.u), d, sc);
             const float v = valueOf ? juce::jlimit (0.f, 1.f, valueOf (n.param)) : 0.5f;
-            const bool act = kParams[n.param].page == page;
+            const bool act = home || kParams[n.param].page == page;
             const juce::Colour c = groupColour (kParams[n.param].group);
             const float flick = 0.92f + 0.08f * std::sin (timeS * 17.f + n.phase);
             const float depthK = 0.5f + 0.5f * juce::jlimit (0.f, 1.f, 0.5f - d * nearK);
-            const float dim = (act ? 1.f : 0.45f) * flick * depthK;
-            const float rad = (2.4f + 3.4f * v) * sg * sc;
+            const float hv = std::max (hl[n.param], flash[n.param]);
+            const float dim = std::max ((act ? 1.f : 0.45f) * flick * depthK, hv);
+            const float rad = (2.4f + 3.4f * v) * (1.f + 0.45f * hv) * sg * sc;
 
             g.setGradientFill (juce::ColourGradient (c.withAlpha ((0.15f + 0.5f * v) * dim), pos.x, pos.y, c.withAlpha (0.f), pos.x + rad * 3.4f, pos.y, true));
             g.fillEllipse (pos.x - rad * 3.4f, pos.y - rad * 3.4f, rad * 6.8f, rad * 6.8f);
@@ -626,6 +740,11 @@ void SeedTree::paint (juce::Graphics& g)
             g.fillEllipse (pos.x - rad - 1.2f, pos.y - rad - 1.2f, (rad + 1.2f) * 2.f, (rad + 1.2f) * 2.f);
             g.setColour (c.interpolatedWith (paper, 0.5f * v).withAlpha (juce::jlimit (0.f, 1.f, dim)));
             g.fillEllipse (pos.x - rad, pos.y - rad, rad * 2.f, rad * 2.f);
+            if (hv > 0.05f)
+            {
+                g.setColour (paper.withAlpha (juce::jlimit (0.f, 1.f, hv)));
+                g.drawEllipse (pos.x - rad - 3.f, pos.y - rad - 3.f, (rad + 3.f) * 2.f, (rad + 3.f) * 2.f, 1.4f);
+            }
         }
         else
         {
@@ -647,11 +766,33 @@ void SeedTree::paint (juce::Graphics& g)
         }
     }
 
+    // name of the parameter being edited, next to its bulb
+    for (const auto& n : nodes)
+    {
+        const float hv = hl[n.param];
+        if (hv < 0.3f || prog[(size_t) n.seg] - n.u <= 0.f) continue;
+        float d, sc;
+        const auto pos = project (bez (dsegs[(size_t) n.seg], n.u), d, sc);
+        const juce::String txt (kParams[n.param].id);
+        const auto f = serif (12.f, false, true);
+        const float tw = juce::GlyphArrangement::getStringWidth (f, txt) + 10.f;
+        const bool right = pos.x < w * 0.5f;
+        juce::Rectangle<float> box (right ? pos.x + 11.f : pos.x - 11.f - tw, pos.y - 9.f, tw, 18.f);
+        box = box.withX (juce::jlimit (2.f, w - tw - 2.f, box.getX()));
+        g.setColour (ink.withAlpha (0.9f * hv));
+        g.fillRoundedRectangle (box, 4.f);
+        g.setColour (red.withAlpha (hv));
+        g.drawRoundedRectangle (box, 4.f, 1.2f);
+        g.setFont (f);
+        g.setColour (paper.withAlpha (hv));
+        g.drawText (txt, box, juce::Justification::centred);
+    }
+
     // page boxes + roman numerals (III on top, growing up from I in the soil)
     const float zoneTop[3] = { ground, yA, topY };
     const float zoneBot[3] = { bottom, ground, yA };
     const char* roman[3] = { "I.", "II.", "III." };
-    for (int pg = 0; pg < 3; ++pg)
+    for (int pg = 0; pg < 3 && ! home; ++pg)
     {
         const juce::Rectangle<float> zone (3.f, zoneTop[pg] + 1.f, w - 6.f, zoneBot[pg] - zoneTop[pg] - 2.f);
         const bool active = pg == page;
@@ -670,7 +811,8 @@ void SeedTree::paint (juce::Graphics& g)
 
     g.setFont (serif (12.f, true));
     g.setColour (mist.withAlpha (0.7f));
-    g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 30, getWidth(), 20, juce::Justification::centred);
+    if (home) g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 26, getWidth() / 2 - 104, 20, juce::Justification::centredRight);
+    else      g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 30, getWidth(), 20, juce::Justification::centred);
 }
 
 //==============================================================================
@@ -699,6 +841,7 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
         if (! (kParams[i].flags & fSwitch))              // switches (mono) are buttons, not knobs
         {
             auto k = std::make_unique<Knob> (proc.apvts, i);
+            k->onInteract = [this] (int idx, float level) { tree.setInteraction (idx, level); };
             addChildComponent (*k);
             knobs.push_back (std::move (k));
         }
@@ -707,6 +850,7 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
 
     monoBtn.setTooltip ("Monophonic: one note at a time. Playing a new key while another is held glides legato to it (set the time with glide).");
     monoAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParams[mono].id, monoBtn);
+    monoBtn.onStateChange = [this] { tree.setInteraction (mono, monoBtn.isDown() ? 1.f : (monoBtn.isOver() ? 0.5f : 0.f)); };
     addChildComponent (monoBtn);
     dv = makeDerived (vals);
 
@@ -729,8 +873,22 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     tree.caption = [this] { return proc.getSeed() > 0 ? "seed #" + juce::String (proc.getSeed()) : juce::String ("seed  -"); };
     tree.onPage = [this] (int pg) { setPage (pg); };
     tree.hostInfo = [this] { return proc.getHostInfo(); };
-    addAndMakeVisible (tree);
+    addChildComponent (tree);
     tree.setSeed (proc.getSeed());
+
+    homeTree.setHome (true);
+    homeTree.valueOf = tree.valueOf;
+    homeTree.caption = tree.caption;
+    homeTree.hostInfo = tree.hostInfo;
+    addAndMakeVisible (homeTree);
+    homeTree.setSeed (proc.getSeed());
+
+    editBtn.setTooltip ("Open the sound editor: envelopes, oscillators, filter and effects");
+    editBtn.onClick = [this] { setHomeView (false); };
+    homeBtn.setTooltip ("Back to the spinning tree");
+    homeBtn.onClick = [this] { setHomeView (true); };
+    addAndMakeVisible (editBtn);
+    addChildComponent (homeBtn);
 
     // ---- bottom bar ----------------------------------------------------------------
     randomizeBtn.onClick = [this] { proc.randomizeNew(); refreshLabels(); };
@@ -775,6 +933,7 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     resized();      // setSize() ran before the knobs/figures existed, so lay everything out now
     refreshLabels();
     setPage (0);
+    setHomeView (true);
     startTimerHz (20);
 }
 
@@ -791,19 +950,36 @@ void SeedEditor::addFigure (int pg, juce::Rectangle<int> rect, const juce::Strin
     figures.push_back (std::move (e));
 }
 
+void SeedEditor::setHomeView (bool h)
+{
+    homeView = h;
+    homeTree.setVisible (h);
+    editBtn.setVisible (h);
+    tree.setVisible (! h);
+    homeBtn.setVisible (! h);
+    skinBtn.setBounds (h ? juce::Rectangle<int> (kWidth - 126, 14, 112, 17) : juce::Rectangle<int> (762, 31, 112, 17));
+    for (auto& k : knobs) k->setVisible (! h && kParams[k->paramIndex].page == page);
+    for (auto& f : figures) f.comp->setVisible (! h && f.page == page);
+    monoBtn.setVisible (! h && page == 1);
+    repaint();
+}
+
 void SeedEditor::setPage (int newPage)
 {
     page = newPage;
     tree.page = newPage;
-    for (auto& k : knobs) k->setVisible (kParams[k->paramIndex].page == page);
-    for (auto& f : figures) f.comp->setVisible (f.page == page);
-    monoBtn.setVisible (page == 1);
+    for (auto& k : knobs) k->setVisible (! homeView && kParams[k->paramIndex].page == page);
+    for (auto& f : figures) f.comp->setVisible (! homeView && f.page == page);
+    monoBtn.setVisible (! homeView && page == 1);
     repaint();
 }
 
 void SeedEditor::resized()
 {
     tree.setBounds (8, 8, 164, 624);
+    homeTree.setBounds (0, 8, kWidth, 624);
+    editBtn.setBounds (kWidth / 2 - 90, 598, 180, 32);
+    homeBtn.setBounds (690, 31, 66, 17);
     scan.setBounds (getLocalBounds());
 
     for (auto& k : knobs)
@@ -828,7 +1004,7 @@ void SeedEditor::resized()
     nextBtn.setBounds (764, y, 26, h);
     saveBtn.setBounds (798, y, 46, h);
     loadBtn.setBounds (848, y, 42, h);
-    skinBtn.setBounds (762, 29, 112, 17);
+    skinBtn.setBounds (homeView ? juce::Rectangle<int> (kWidth - 126, 14, 112, 17) : juce::Rectangle<int> (762, 31, 112, 17));
     monoBtn.setBounds (kContentX + 388, kContentY + 222, 84, 24);
 }
 
@@ -855,6 +1031,7 @@ void SeedEditor::timerCallback()
         for (auto& f : figures) if (f.page == page) f.comp->repaint();
     }
     tree.setSeed (proc.getSeed());
+    homeTree.setSeed (proc.getSeed());
     if (proc.getSeed() != lastSeedShown || proc.getPresetName() != lastPresetShown) refreshLabels();
 }
 
@@ -948,14 +1125,27 @@ void SeedEditor::paint (juce::Graphics& g)
                                              ink, 0.f, 0.f, true));
     g.fillRect (getLocalBounds());
 
+    if (homeView)
+    {
+        glowText (g, "SEEDLING", { 0, 8, kWidth, 40 }, serif (30.f, false, true).withExtraKerningFactor (0.3f), red, juce::Justification::centred);
+        for (float y : { 9.f, 47.f })
+        {
+            g.setColour (red.withAlpha (0.3f));
+            g.drawLine (250.f, y, 650.f, y, 3.f);
+            g.setColour (red);
+            g.drawLine (250.f, y, 650.f, y, 1.f);
+        }
+    }
+
     // panel behind the content
-    const juce::Rectangle<float> panel (178.f, 6.f, (float) kWidth - 190.f, 626.f);
+    const juce::Rectangle<float> panel (homeView ? 0.f : 178.f, 6.f, homeView ? 0.f : (float) kWidth - 190.f, homeView ? 0.f : 626.f);
     g.setColour (ink.interpolatedWith (slate, 0.12f));
     g.fillRoundedRectangle (panel, 6.f);
     g.setColour (slate.withAlpha (0.55f));
     g.drawRoundedRectangle (panel.reduced (0.5f), 6.f, 1.f);
 
     // neon page title between two thin red rules
+    if (! homeView) {
     const juce::String title = (juce::String (kRoman[page]) + "   " + kPageTitles[page]).toUpperCase();
     glowText (g, title, { kContentX, 10, 480, 36 }, serif (25.f, false, true).withExtraKerningFactor (0.14f), red, juce::Justification::centred);
     for (float y : { 9.f, 47.f })
@@ -969,8 +1159,9 @@ void SeedEditor::paint (juce::Graphics& g)
     // wordmark
     glowText (g, "SEEDLING", { 690, 8, 184, 26 }, serif (20.f, false, true).withExtraKerningFactor (0.2f), red, juce::Justification::centredRight);
 
+    }
     // signal-flow arrows on the oscillator page
-    if (page == 1)
+    if (! homeView && page == 1)
     {
         g.setColour (mist.withAlpha (0.55f));
         const float ox = (float) kContentX, oy = (float) kContentY;

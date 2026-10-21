@@ -68,11 +68,6 @@ target_compile_definitions(Seedling PUBLIC
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
-# Keep Randomize bit-identical on every platform (no fused multiply-add), so a seed grows the same patch everywhere.
-if(NOT MSVC)
-    target_compile_options(Seedling PRIVATE -ffp-contract=off)
-endif()
-
 # Only for building the VST3 on a minimal Linux box that lacks the optional X11 extension libraries.
 option(SEED_MINIMAL_LINUX "Disable optional X11 extensions (Xrandr/Xinerama/Xcursor)" OFF)
 if(SEED_MINIMAL_LINUX)
@@ -92,9 +87,6 @@ add_executable(seed_engine_test EXCLUDE_FROM_ALL Tests/engine_test.cpp Source/En
 target_include_directories(seed_engine_test PRIVATE Source)
 add_executable(seed_compat_test EXCLUDE_FROM_ALL Tests/seed_compat_test.cpp)
 target_include_directories(seed_compat_test PRIVATE Source)
-if(NOT MSVC)
-    target_compile_options(seed_compat_test PRIVATE -ffp-contract=off)
-endif()
 enable_testing()
 add_test(NAME seed_compat COMMAND seed_compat_test)
 add_test(NAME engine COMMAND seed_engine_test)
