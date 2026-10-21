@@ -71,6 +71,7 @@ inline void randomizeValues (uint32_t seedValue, float chaos, float* out)
         if ((p.flags & fStar) && ! (p.flags & fSemitone))
             v = p.def + (v - p.def) * 0.5f;
 
+        if (p.flags & fNoRandom) v = p.def;
         out[i] = v < p.lo ? p.lo : (v > p.hi ? p.hi : v);
     }
 }

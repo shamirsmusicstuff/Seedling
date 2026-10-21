@@ -41,6 +41,7 @@ struct Derived
     float fltType, fltK, fltHz, fltKf, fltMod, fltSep;     // fltK = 1/Q
     float sat, rvbMix, rvbAtk, rvbRt60, rvbDamp, rvbChor, rvbSize;
     float bass, treb, pan, clip;
+    float glideSec, mono;                                 // glideSec 0 = off; mono >= 0.5 = monophonic
 };
 
 Derived makeDerived (const float* p);

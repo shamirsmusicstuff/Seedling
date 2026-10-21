@@ -19,6 +19,10 @@ jobs:
           else
             cmake -B build -DCMAKE_BUILD_TYPE=Release
           fi
+      - name: Saved-seed compatibility test (old seeds must still grow the same patches)
+        run: |
+          cmake --build build --config Release --target seed_compat_test
+          ctest --test-dir build -C Release -R seed_compat --output-on-failure
       - name: Build
         run: cmake --build build --config Release --target Seedling_VST3 -j 4
       - uses: actions/upload-artifact@v4

@@ -57,6 +57,8 @@ Derived makeDerived (const float* p)
     d.rvbChor = p[rvb_chor];
     d.rvbSize = p[rvb_size];
 
+    d.glideSec = p[glide] < 0.01f ? 0.f : 0.004f * std::pow (750.f, p[glide]);   // 4 ms .. 3 s
+    d.mono = p[mono];
     d.bass = p[adj_bass]; d.treb = p[adj_treb]; d.pan = p[adj_pan]; d.clip = p[adj_clip];
     return d;
 }
@@ -142,6 +144,7 @@ namespace
 
         int vstage = 0;               // 0 idle, 1 attack, 2 decay/sustain, 3 release
         float vlvl = 0.f, fadeGain = 1.f;
+        float glideNote = 60.f;       // the pitch actually sounding (in notes); glides towards `note`
         float modT = 0.f, ageS = 0.f;
         float phA = 0.f, phB = 0.f, phSub = 0.f, phLfo = 0.f, holdPh = 0.f, held = 0.f;
         float nA = 0.f, nB = 0.f;
@@ -151,7 +154,7 @@ namespace
         void start (int n, float v, int64_t order, uint32_t seedBits)
         {
             active = true; keyDown = true; sustained = false;
-            note = n; vel = v; startOrder = order;
+            note = n; vel = v; startOrder = order; glideNote = (float) n;
             vstage = 1; vlvl = 0.f; fadeGain = 1.f;
             modT = 0.f; ageS = 0.f;
             phA = phB = phSub = holdPh = held = 0.f; phLfo = 0.f;
@@ -181,17 +184,29 @@ namespace
             const float velMod = 1.f - d.modVel * (1.f - vel);
             const float velAmp = 0.35f + 0.65f * vel;
 
-            const float baseA = 440.f * std::exp2 ((noteRel - 9.f + d.aSemi + bend) / 12.f);
-            const float baseB = 440.f * std::exp2 ((noteRel - 9.f + d.bSemi + bend) / 12.f);
+            float pitchRel = glideNote - 60.f;
+            auto baseOf = [&] (float semi) { return 440.f * std::exp2 ((pitchRel - 9.f + semi + bend) / 12.f); };
+            float baseA = baseOf (d.aSemi), baseB = baseOf (d.bSemi);
+            const float glideCo = d.glideSec > 0.f ? 1.f - std::exp (-3.f / (d.glideSec * sr)) : 1.f;   // ~95% of the way in glideSec
             const float lfoInc = d.lfoHz / sr;
             const float lfoDelayS = d.lfoDelay * sr;
             const float holdInc = d.bHoldHz > 0.f ? d.bHoldHz / sr : 0.f;
             const float gSep = std::exp2 (d.fltSep * 3.f);
-            const float fcBase = d.fltHz * std::exp2 (d.fltKf * noteRel / 12.f);
+            float fcBase = d.fltHz * std::exp2 (d.fltKf * pitchRel / 12.f);
             const float fcMax = 0.45f * sr;
 
             for (int i = 0; i < n; ++i)
             {
+                // --- glide: slide the sounding pitch towards the key --------------------
+                if (glideNote != (float) note)
+                {
+                    glideNote += ((float) note - glideNote) * glideCo;
+                    if (std::fabs ((float) note - glideNote) < 1e-3f) glideNote = (float) note;
+                    pitchRel = glideNote - 60.f;
+                    baseA = baseOf (d.aSemi); baseB = baseOf (d.bSemi);
+                    fcBase = d.fltHz * std::exp2 (d.fltKf * pitchRel / 12.f);
+                }
+
                 // --- LFO ---------------------------------------------------
                 phLfo += lfoInc; if (phLfo >= 1.f) phLfo -= 1.f;
                 const float ramp = lfoDelayS > 1.f ? std::min (1.f, ageS / lfoDelayS) : 1.f;
@@ -395,7 +410,9 @@ struct Engine::Impl
     float bend = 0.f;
     bool sustain = false;
 
-    float mono[kChunk] = {};
+    std::vector<int> held;        // keys currently down, in order (mono mode: last-note priority)
+    float lastPitch = -1.f;       // where the mono voice last was, so the next note can glide from it
+    float mixBuf[kChunk] = {};
     float dcX = 0.f, dcY = 0.f;
     Reverb rvb;
     Biquad lowL, lowR, highL, highR;
@@ -416,6 +433,7 @@ struct Engine::Impl
     void reset()
     {
         for (auto& v : voices) { v.active = false; v.vstage = 0; }
+        held.clear(); lastPitch = -1.f;
         dcX = dcY = 0.f;
         rvb.reset();
         for (auto* b : { &lowL, &lowR, &highL, &highR }) b->reset();
@@ -423,8 +441,49 @@ struct Engine::Impl
         snap = true;
     }
 
+    bool monoMode() const { return tgt[P::mono] >= 0.5f; }
+
+    // Monophonic: one voice. Playing a key while another is held slides to the new pitch (legato, envelopes keep
+    // running); otherwise a new note starts, sliding from wherever the last one was.
+    void monoNoteOn (int note, float v)
+    {
+        held.erase (std::remove (held.begin(), held.end(), note), held.end());
+        auto& vo = voices[0];
+        const bool legato = ! held.empty() && vo.active && vo.keyDown;
+        held.push_back (note);
+        for (size_t i = 1; i < voices.size(); ++i) if (voices[i].active) voices[i].release();
+
+        if (legato) { vo.note = note; vo.vel = clampf (v, 0.f, 1.f); return; }
+
+        const Voice old = vo;
+        ++order;
+        vo.start (note, clampf (v, 0.f, 1.f), order, (uint32_t) order);
+        vo.glideNote = lastPitch >= 0.f ? lastPitch : (float) note;
+        if (old.active)                       // taking over a note that is still ringing: carry on from where it was (no click)
+        {
+            vo.vlvl = old.vlvl * old.fadeGain;
+            vo.phA = old.phA; vo.phB = old.phB; vo.phSub = old.phSub;
+            vo.f1 = old.f1; vo.f2 = old.f2;
+        }
+    }
+
+    void monoNoteOff (int note)
+    {
+        held.erase (std::remove (held.begin(), held.end(), note), held.end());
+        auto& vo = voices[0];
+        if (! vo.active) return;
+        if (! held.empty()) { vo.note = held.back(); return; }       // fall back to the key still held, gliding to it
+        if (vo.keyDown)
+        {
+            if (sustain) { vo.keyDown = false; vo.sustained = true; }
+            else vo.release();
+        }
+    }
+
     void noteOn (int note, float v)
     {
+        if (monoMode()) { monoNoteOn (note, v); return; }
+        held.clear();
         Voice* pick = nullptr;
         for (auto& vo : voices) if (vo.active && vo.note == note) { pick = &vo; break; }   // retrigger
         if (! pick) for (auto& vo : voices) if (! vo.active) { pick = &vo; break; }
@@ -440,6 +499,7 @@ struct Engine::Impl
 
     void noteOff (int note)
     {
+        if (monoMode()) { monoNoteOff (note); return; }
         for (auto& vo : voices)
             if (vo.active && vo.keyDown && vo.note == note)
             {
@@ -488,8 +548,9 @@ struct Engine::Impl
         {
             const int c = std::min (kChunk, n - pos);
             updateParams (c);
-            std::memset (mono, 0, sizeof (mono));
-            for (auto& v : voices) if (v.active) v.render (mono, c, d, sr, bend);
+            std::memset (mixBuf, 0, sizeof (mixBuf));
+            for (auto& v : voices) if (v.active) v.render (mixBuf, c, d, sr, bend);
+            if (monoMode() && voices[0].active) lastPitch = voices[0].glideNote;
 
             const float panA = (d.pan + 1.f) * kPi * 0.25f;
             const float gL = std::cos (panA) * 1.41421356f, gR = std::sin (panA) * 1.41421356f;
@@ -499,7 +560,7 @@ struct Engine::Impl
             for (int i = 0; i < c; ++i)
             {
                 // DC blocker
-                const float x0 = mono[i];
+                const float x0 = mixBuf[i];
                 dcY = x0 - dcX + 0.995f * dcY; dcX = x0;
                 float x = saturateCurve (dcY, d.sat);
 
@@ -532,7 +593,7 @@ void Engine::reset() { impl->reset(); }
 void Engine::setParams (const float* v) { std::memcpy (impl->tgt, v, sizeof (float) * kNumParams); }
 void Engine::noteOn (int note, float vel) { impl->noteOn (note, vel); }
 void Engine::noteOff (int note) { impl->noteOff (note); }
-void Engine::allNotesOff() { for (auto& v : impl->voices) if (v.active) v.release(); impl->sustain = false; }
+void Engine::allNotesOff() { for (auto& v : impl->voices) if (v.active) v.release(); impl->sustain = false; impl->held.clear(); }
 void Engine::setPitchBend (float semitones) { impl->bend = semitones; }
 void Engine::setSustain (bool down) { impl->setSustain (down); }
 void Engine::render (float* L, float* R, int n) { impl->render (L, R, n); }

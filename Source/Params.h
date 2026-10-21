@@ -7,14 +7,16 @@
 namespace seed
 {
 
-enum Group : uint8_t { gEnv, gVol, gMod, gLfo, gOscA, gFm, gMix, gOscB, gFlt, gSat, gRvb, gAdj };
+enum Group : uint8_t { gEnv, gVol, gMod, gLfo, gOscA, gFm, gMix, gOscB, gFlt, gSat, gRvb, gAdj, gPlay };
 
 enum Flags : uint8_t
 {
     fBipolar  = 1,  // arc is drawn from the centre
     fStar     = 2,  // the "*" knobs in the pictures: randomizer keeps these conservative
     fOffBias  = 4,  // randomizer often leaves this one at its default (off)
-    fSemitone = 8   // value is in semitones (tuning-sensitive)
+    fSemitone = 8,  // value is in semitones (tuning-sensitive)
+    fSwitch   = 16, // on/off switch (shown as a button, host sees a bool)
+    fNoRandom = 32  // Randomize leaves this alone (it is a playing mode, not a sound)
 };
 
 struct ParamDef
@@ -45,6 +47,8 @@ enum P : int
     saturate,
     rvb_mix, rvb_atk, rvb_len, rvb_damp, rvb_chor, rvb_size,
     adj_bass, adj_treb, adj_pan, adj_clip,
+    // ---- Play mode (shown on page II; appended so existing seeds keep growing the same patches) -------
+    glide, mono,
 
     kNumParams
 };
@@ -111,6 +115,9 @@ inline constexpr ParamDef kParams[kNumParams] =
     { "adj_treb",  "Adjust Treble",    -1.f,   1.f,  0.0f,  0.00f, 0.40f, gAdj,  2, fBipolar },
     { "adj_pan",   "Adjust Pan",       -1.f,   1.f,  0.0f, -0.25f, 0.25f, gAdj,  2, fBipolar },
     { "adj_clip",  "Adjust Clip",       0.f,   1.f,  0.0f,  0.00f, 0.10f, gAdj,  2, fStar | fOffBias },
+
+    { "glide",     "Glide",             0.f,   1.f,  0.0f,  0.00f, 0.30f, gPlay, 1, fNoRandom },
+    { "mono",      "Mono",              0.f,   1.f,  0.0f,  0.00f, 1.00f, gPlay, 1, fSwitch | fNoRandom },
 };
 
 inline constexpr const char* kPageTitles[3] = { "Envelope and LFO", "Oscillators", "Filter and effects" };

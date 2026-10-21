@@ -11,6 +11,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SeedProcessor::createLayout(
 
     for (const auto& d : kParams)
     {
+        if (d.flags & fSwitch)
+        {
+            layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { d.id, 1 }, d.name, d.def > 0.5f));
+            continue;
+        }
+
         const bool semi = (d.flags & fSemitone) != 0;
         auto attrs = juce::AudioParameterFloatAttributes().withStringFromValueFunction (
             [semi] (float v, int) { return juce::String (v, 2) + (semi ? " st" : ""); });
@@ -68,6 +74,15 @@ void SeedProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
     const int n = buffer.getNumSamples();
     buffer.clear();
     if (buffer.getNumChannels() < 2) return;
+
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+        {
+            if (auto bpm = pos->getBpm()) hostBpm = *bpm;
+            if (auto ppq = pos->getPpqPosition()) { hostPpq = *ppq; hostHasPpq = true; }
+            else hostHasPpq = false;
+            hostPlaying = pos->getIsPlaying();
+        }
 
     float values[kNumParams];
     for (int i = 0; i < kNumParams; ++i) values[i] = raw[i]->load();
@@ -143,6 +158,8 @@ void SeedProcessor::randomize (uint32_t seedValue)
 {
     float v[kNumParams];
     randomizeValues (seedValue, chaosParam->load(), v);
+    for (int i = 0; i < kNumParams; ++i)
+        if (kParams[i].flags & fNoRandom) v[i] = getReal (i);        // Randomize changes the sound, not the play mode
     if (autoTuneParam->load() > 0.5f) seed::correctTune (v);
 
     setAllReal (v);
@@ -214,7 +231,8 @@ bool SeedProcessor::loadPreset (const juce::File& file)
     if (xml == nullptr || ! xml->hasTagName ("SeedlingPreset")) return false;
 
     float v[kNumParams];
-    for (int i = 0; i < kNumParams; ++i) v[i] = kParams[i].def;   // anything missing falls back to default
+    for (int i = 0; i < kNumParams; ++i)       // anything missing falls back to default - except play-mode settings (mono, glide),
+        v[i] = (kParams[i].flags & fNoRandom) ? getReal (i) : kParams[i].def;   // which older presets never had: those stay as the player set them
 
     for (auto* e : xml->getChildWithTagNameIterator ("P"))
     {

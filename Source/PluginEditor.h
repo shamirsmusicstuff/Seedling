@@ -5,17 +5,20 @@
 #include <memory>
 #include <vector>
 #include "PluginProcessor.h"
+#include "Skins.h"
 
 //==============================================================================
 namespace ui
 {
-    // Palette: https://coolors.co/0c120c-c20114-6d7275-c7d6d5-ecebf3
-    inline const juce::Colour ink   { 0xff0c120c };
-    inline const juce::Colour red   { 0xffc20114 };
-    inline const juce::Colour slate { 0xff6d7275 };
-    inline const juce::Colour mist  { 0xffc7d6d5 };
-    inline const juce::Colour paper { 0xffecebf3 };
+    // The current skin. Defaults to the original palette: https://coolors.co/0c120c-c20114-6d7275-c7d6d5-ecebf3
+    // ink = background, red = the neon accent colour (whatever the skin makes it), slate = lines, mist = secondary, paper = text
+    inline juce::Colour ink   { 0xff0c120c };
+    inline juce::Colour red   { 0xffc20114 };
+    inline juce::Colour slate { 0xff6d7275 };
+    inline juce::Colour mist  { 0xffc7d6d5 };
+    inline juce::Colour paper { 0xffecebf3 };
 
+    void apply (const seed::Skin&);
     juce::Font serif (float height, bool italic = false, bool bold = false);
     juce::Colour groupColour (int group);
 }
@@ -33,6 +36,7 @@ public:
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
     void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
+    void applyPalette();     // re-read the ui:: colours (after a skin change)
 };
 
 //==============================================================================
@@ -72,6 +76,8 @@ private:
 class SeedTree : public juce::Component, private juce::Timer
 {
 public:
+    using HostInfo = SeedProcessor::HostInfo;
+
     SeedTree();
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -79,28 +85,37 @@ public:
 
     void setSeed (uint32_t s);
     void skipGrowth (float g = 1.f) { growth = g; }
+    void setSpin (float radians) { spin = radians; }
 
     int page = 0;
     std::function<void (int)> onPage;
     std::function<float (int)> valueOf;      // normalised 0..1 for a parameter index
     std::function<juce::String()> caption;
+    std::function<HostInfo()> hostInfo;      // host tempo / song position, drives the spin
+
+    static constexpr double kBeatsPerRev = 32.0;   // one slow turn every 8 bars of 4/4
 
 private:
-    struct Seg  { juce::Point<float> a, c, b; float thick, t0, t1; int zone; bool root; };
+    struct V3 { float x = 0.f, y = 0.f, z = 0.f; };
+    struct Seg  { V3 a, c, b; float thick, t0, t1; int zone; bool root; };
     struct Node { int seg; float u; int param; float phase; };
+    struct Item { float depth; int kind; int idx; };   // kind 0 = branch, 1 = bulb, 2 = the seed
 
     void timerCallback() override;
     void rebuild();
-    juce::Point<float> bez (const Seg&, float u) const;
-    juce::Point<float> sway (juce::Point<float>) const;
+    V3 bez (const Seg&, float u) const;
+    juce::Point<float> project (V3 p, float& depth, float& scale) const;
     int zoneOfY (float y) const;
+
+    static constexpr float kPitch = 0.22f;   // camera looks down on the tree a little
 
     std::vector<Seg> segs;
     std::vector<Node> nodes;
     std::vector<float> prog;
+    std::vector<Item> items;
     uint32_t rawSeed = 0xffffffffu, treeSeed = 29;
-    float growth = 0.f, timeS = 0.f;
-    float topY = 8.f, H = 0.f, yA = 0.f, ground = 0.f;
+    float growth = 0.f, timeS = 0.f, spin = 0.f;
+    float topY = 8.f, H = 0.f, yA = 0.f, ground = 0.f, rMax = 60.f;
 };
 
 // CRT scanlines + vignette laid over the whole editor (never takes mouse clicks).
@@ -122,12 +137,17 @@ public:
     void resized() override;
     void showPageForTest (int p) { setPage (p); }
     void setGrowthForTest (float g) { tree.skipGrowth (g); }
+    void setSpinForTest (float r) { tree.setSpin (r); }
+    void setSkinForTest (const seed::Skin& k) { ui::apply (k); lnf.applyPalette(); sendLookAndFeelChange(); scan.repaint(); repaint(); }
     void syncForTest() { timerCallback(); }
 
 private:
     void timerCallback() override;
     void setPage (int newPage);
     void refreshLabels();
+    void loadSkins();
+    void chooseSkin (const juce::String& name);
+    void showSkinMenu();
     void savePresetDialog();
     void loadPresetDialog();
 
@@ -170,6 +190,11 @@ private:
     juce::TextEditor seedBox;
     juce::Slider chaosSlider;
     juce::ToggleButton autoTuneBtn { "auto-tune" };
+    juce::ToggleButton monoBtn { "mono" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
+    juce::TextButton skinBtn { "skin" };
+    std::vector<seed::Skin> skinList;
+    juce::String skinName;
     juce::Label presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chaosAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoTuneAttach;

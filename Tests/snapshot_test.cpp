@@ -4,6 +4,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Skins.h"
 #include <cstdio>
 
 static int failures = 0;
@@ -39,7 +40,10 @@ int main (int argc, char** argv)
     std::printf ("randomize/correct tune: ok (seed 29: a_freq %.1f, b_freq %.1f)\n", a29, b29);
 
     // --- preset save / load ---------------------------------------------------------------
+    proc.setReal (seed::mono, 1.f);                       // Randomize must leave the play mode alone
     proc.randomize (777);
+    CHECK (proc.getReal (seed::mono) == 1.f, "Randomize switched mono off");
+    CHECK (proc.getReal (seed::glide) == 0.f, "Randomize changed glide");
     for (int i = 0; i < seed::kNumParams; ++i) snapshot[i] = proc.getReal (i);
     const auto file = outDir.getChildFile ("roundtrip.seedling");
     CHECK (proc.savePreset (file), "savePreset failed");
@@ -58,6 +62,59 @@ int main (int argc, char** argv)
     for (int i = 0; i < seed::kNumParams; ++i)
         CHECK (std::abs (proc.getReal (i) - snapshot[i]) < 1e-4f, "host state mismatch at %s", seed::kParams[i].id);
     std::printf ("host state round trip: ok (%d bytes)\n", (int) state.getSize());
+
+    // --- compatibility with files / sessions saved by the previous version (no glide / mono) ----------
+    {
+        // a host session without the two new parameters still loads, and they come up off
+        auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+        CHECK (xml != nullptr, "state is not XML");
+        if (xml != nullptr)
+        {
+            for (int i = xml->getNumChildElements() - 1; i >= 0; --i)
+            {
+                auto* c = xml->getChildElement (i);
+                const auto id = c->getStringAttribute ("id");
+                if (id == "glide" || id == "mono") xml->removeChildElement (c, true);
+            }
+            juce::MemoryBlock oldState;
+            juce::AudioProcessor::copyXmlToBinary (*xml, oldState);
+            SeedProcessor fresh;
+            fresh.setStateInformation (oldState.getData(), (int) oldState.getSize());
+            for (int i = 0; i < seed::kNumParams; ++i)
+            {
+                if (i == seed::glide || i == seed::mono) continue;
+                CHECK (std::abs (fresh.getReal (i) - snapshot[i]) < 1e-4f, "old session mismatch at %s", seed::kParams[i].id);
+            }
+            CHECK (fresh.getReal (seed::glide) == 0.f && fresh.getReal (seed::mono) == 0.f, "glide/mono should default to off for old sessions");
+            CHECK (fresh.getSeed() == 777, "old session lost its seed");
+            std::printf ("old host session (no glide/mono): ok\n");
+        }
+
+        // a preset file written by the previous version (argv[2]) loads exactly
+        if (argc > 2)
+        {
+            const juce::File oldPreset (argv[2]);
+            auto px = juce::XmlDocument::parse (oldPreset);
+            CHECK (px != nullptr, "cannot read %s", argv[2]);
+            if (px != nullptr)
+            {
+                SeedProcessor fresh;
+                CHECK (fresh.loadPreset (oldPreset), "old preset failed to load");
+                int checked = 0;
+                for (auto* e : px->getChildWithTagNameIterator ("P"))
+                    for (int i = 0; i < seed::kNumParams; ++i)
+                        if (e->getStringAttribute ("id") == seed::kParams[i].id)
+                        {
+                            CHECK (std::abs (fresh.getReal (i) - (float) e->getDoubleAttribute ("v")) < 1e-4f, "old preset value differs at %s", seed::kParams[i].id);
+                            ++checked;
+                        }
+                CHECK (checked == seed::kNumParams - 2, "expected %d old parameters, matched %d", seed::kNumParams - 2, checked);
+                CHECK (fresh.getReal (seed::glide) == 0.f && fresh.getReal (seed::mono) == 0.f, "old preset should leave glide/mono off");
+                CHECK (fresh.getSeed() == (uint32_t) px->getIntAttribute ("seed"), "old preset seed not restored");
+                std::printf ("old preset file (%d params, seed %d): ok\n", checked, px->getIntAttribute ("seed"));
+            }
+        }
+    }
 
     // --- audio through the processor ------------------------------------------------------
     {
@@ -110,6 +167,72 @@ int main (int argc, char** argv)
         png.deleteFile();
         juce::FileOutputStream fo (png);
         juce::PNGImageFormat().writeImageToStream (img, fo);
+    }
+
+    // --- skins: parsing, roles, files ---------------------------------------------------------
+    {
+        using namespace seed;
+        Skin k; juce::String err;
+        const juce::Colour ink (0xff0c120c), red (0xffc20114), slate (0xff6d7275), mist (0xffc7d6d5), paper (0xffecebf3);
+
+        CHECK (skins::parse ("https://coolors.co/0c120c-c20114-6d7275-c7d6d5-ecebf3", "url", k, err), "coolors URL: %s", err.toRawUTF8());
+        CHECK (k.ink == ink && k.accent == red && k.slate == slate && k.mist == mist && k.paper == paper, "coolors URL roles wrong");
+
+        CHECK (skins::parse ("{ \"name\": \"J\", \"colors\": [\"ECEBF3\",\"C20114\",\"0C120C\",\"C7D6D5\",\"6D7275\"] }", "x", k, err), "json: %s", err.toRawUTF8());
+        CHECK (k.name == "J" && k.ink == ink && k.accent == red && k.slate == slate && k.mist == mist && k.paper == paper, "shuffled colours must give the same roles");
+
+        CHECK (skins::parse ("name: Loose\n// comment\n#202030, #39304A  635C51 7D7461\nB0A990", "x", k, err), "plain text: %s", err.toRawUTF8());
+        CHECK (k.name == "Loose" && k.ink == juce::Colour (0xff202030) && k.paper == juce::Colour (0xffb0a990), "plain text skin wrong");
+
+        CHECK (skins::parse ("{ \"colors\": [\"000000\",\"111111\",\"222222\",\"333333\",\"444444\"], \"roles\": { \"ink\": \"010101\", \"accent\": \"ff0000\", \"slate\": \"020202\", \"mist\": \"030303\", \"paper\": \"fefefe\" } }", "R", k, err), "roles: %s", err.toRawUTF8());
+        CHECK (k.name == "R" && k.accent == juce::Colour (0xffff0000), "explicit roles ignored");
+
+        CHECK (! skins::parse ("{ \"colors\": [\"123\", \"zzzzzz\"] }", "bad", k, err) && err.isNotEmpty(), "bad skin accepted");
+        CHECK (! skins::parse ("{ not json", "bad", k, err), "broken json accepted");
+        CHECK (! skins::parse ("hello world", "bad", k, err), "text without colours accepted");
+
+        // the original palette must keep its exact roles when it is auto-assigned; the three new palettes must be readable
+        const auto all = skins::builtins();
+        CHECK (all.size() == 4, "expected 4 built-in skins, got %d", (int) all.size());
+        CHECK (all[0].ink == ink && all[0].accent == red && all[0].slate == slate && all[0].mist == mist && all[0].paper == paper, "default skin roles changed");
+        for (auto& sk : all)
+        {
+            const float text = skins::contrast (sk.paper, sk.ink), accent = skins::contrast (sk.accent, sk.ink);
+            std::printf ("skin %-9s text contrast %.1f  accent contrast %.1f  (ink %s accent %s)\n", sk.name.toRawUTF8(), text, accent,
+                         sk.ink.toDisplayString (false).toRawUTF8(), sk.accent.toDisplayString (false).toRawUTF8());
+            CHECK (text >= 4.5f, "skin %s: text contrast only %.1f", sk.name.toRawUTF8(), text);
+            CHECK (accent >= 2.5f, "skin %s: accent contrast only %.1f", sk.name.toRawUTF8(), accent);
+        }
+
+        juce::StringArray problems;
+        const auto loaded = skins::loadAll (&problems);
+        CHECK (loaded.size() >= 4 && problems.isEmpty(), "skins folder: %d skins, %d problems", (int) loaded.size(), problems.size());
+        CHECK (skins::dir().getChildFile ("README.txt").existsAsFile(), "skins README not written");
+        std::printf ("skins folder: %s (%d skins)\n", skins::dir().getFullPathName().toRawUTF8(), (int) loaded.size());
+
+        // render every skin, and the tree at two spin angles
+        editor->setGrowthForTest (1.f);
+        editor->showPageForTest (1);
+        for (auto& sk : loaded)
+        {
+            editor->setSkinForTest (sk);
+            auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            const auto png = outDir.getChildFile ("skin_" + sk.name.replaceCharacter (' ', '_') + ".png");
+            png.deleteFile();
+            juce::FileOutputStream fo (png);
+            juce::PNGImageFormat().writeImageToStream (img, fo);
+        }
+        editor->setSkinForTest (loaded.front());
+        editor->showPageForTest (0);
+        for (float a : { 0.f, 1.2f, 2.4f })
+        {
+            editor->setSpinForTest (a);
+            auto img = editor->createComponentSnapshot (editor->getLocalBounds().removeFromLeft (180), true, 1.0f);
+            const auto png = outDir.getChildFile ("spin_" + juce::String ((int) (a * 10)) + ".png");
+            png.deleteFile();
+            juce::FileOutputStream fo (png);
+            juce::PNGImageFormat().writeImageToStream (img, fo);
+        }
     }
 
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);

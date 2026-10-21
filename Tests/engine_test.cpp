@@ -63,6 +63,8 @@ static void pitchPatch (float* p)
     p[env_time] = 0.5f; p[env_kf] = 0;
 }
 
+static float makeDerivedGlide (const float* p) { return makeDerived (p).glideSec; }
+
 static int failures = 0;
 #define CHECK(cond, ...) do { if (! (cond)) { ++failures; std::printf ("  FAIL: "); std::printf (__VA_ARGS__); std::printf ("\n"); } } while (0)
 
@@ -144,6 +146,52 @@ int main()
         CHECK (bad == 0, "non-finite samples at chaos %.1f", chaos);
         CHECK (worstPeak <= 1.0001f, "output exceeded full scale (%.3f)", worstPeak);
         if (chaos == 0.f) CHECK (silent * 20 <= n, "too many silent soft patches (%d of %d)", silent, n);
+    }
+
+    std::printf ("== 2b. Mono + glide ==\n");
+    {
+        float p[kNumParams];
+        pitchPatch (p);
+        p[mono] = 1.f; p[glide] = 0.f;
+
+        // chord in mono mode: only the last key sounds (G4 = 392 Hz), no leftovers from C4 / E4
+        {
+            auto r = renderNotes (p, { 60, 64, 67 }, 1.f, 1.f, 0.8f);
+            const float hz = estimateHz (r.L, 12000, 36000);
+            std::printf ("  mono chord C-E-G sounds %.2f Hz (expected 392.00)\n", hz);
+            CHECK (std::fabs (hz / 392.f - 1.f) < 0.005f, "mono chord should sound only the last note");
+        }
+
+        // legato glide: C4 held, then C5 played over it with glide on: pitch sweeps up and arrives at C5
+        p[glide] = 0.6f;
+        const float glideSec = makeDerivedGlide (p);
+        Engine e; e.prepare (kSr); e.setParams (p);
+        std::vector<float> L ((size_t) (4.f * kSr)), R (L.size());
+        e.noteOn (60, 1.f);
+        e.render (L.data(), R.data(), (int) kSr);                       // 1 s on C4
+        e.noteOn (72, 1.f);                                             // legato: key 60 still down
+        e.render (L.data() + (int) kSr, R.data() + (int) kSr, (int) (3.f * kSr));
+        const float before = estimateHz (L, 12000, 44000);
+        const float during = estimateHz (L, (int) (kSr + 0.02f * kSr), (int) (kSr + 0.10f * kSr));
+        const float after  = estimateHz (L, (int) (kSr + (glideSec + 0.8f) * kSr), (int) (kSr + (glideSec + 1.4f) * kSr));
+        std::printf ("  glide time %.2f s: before %.1f Hz, early in glide %.1f Hz, after %.1f Hz (C4 261.6, C5 523.3)\n", glideSec, before, during, after);
+        CHECK (std::fabs (before / 261.63f - 1.f) < 0.005f, "pre-glide pitch off");
+        CHECK (during > 270.f && during < 515.f, "no glide heard (%.1f Hz)", during);
+        CHECK (std::fabs (after / 523.25f - 1.f) < 0.005f, "glide did not arrive at the new note (%.1f Hz)", after);
+
+        // releasing the new key while the old one is still held glides back down to it (last-note priority)
+        e.noteOff (72);
+        std::vector<float> L2 ((size_t) (4.f * kSr)), R2 (L2.size());
+        e.render (L2.data(), R2.data(), (int) (4.f * kSr));
+        const float back = estimateHz (L2, (int) ((glideSec + 0.8f) * kSr), (int) ((glideSec + 1.4f) * kSr));
+        std::printf ("  after releasing C5 with C4 still held: %.1f Hz\n", back);
+        CHECK (std::fabs (back / 261.63f - 1.f) < 0.01f, "did not fall back to the held key (%.1f Hz)", back);
+
+        // poly mode is untouched: the same chord gives three voices (the lowest note's period dominates the zero crossings)
+        p[mono] = 0.f; p[glide] = 0.f;
+        auto poly = renderNotes (p, { 60, 64, 67 }, 1.f, 1.f, 0.8f);
+        double energy = 0; for (int i = 12000; i < 36000; ++i) energy += (double) poly.L[(size_t) i] * poly.L[(size_t) i];
+        CHECK (energy > 0.0, "poly chord silent");
     }
 
     std::printf ("== 3. Defaults, reverb tail, CPU ==\n");

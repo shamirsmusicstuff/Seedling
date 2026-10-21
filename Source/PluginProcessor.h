@@ -50,6 +50,10 @@ public:
     void correctTune();                       // snap A to octaves and B to perfect intervals
     uint32_t getSeed() const { return currentSeed.load(); }
 
+    // Tempo / transport as last seen from the host (audio thread writes, UI reads). bpm = 0 when the host gives none.
+    struct HostInfo { double bpm = 0.0, ppq = 0.0; bool playing = false, hasPpq = false; };
+    HostInfo getHostInfo() const { return { hostBpm.load(), hostPpq.load(), hostPlaying.load(), hostHasPpq.load() }; }
+
     // Presets (*.seedling, small XML files)
     bool savePreset (const juce::File& file);
     bool loadPreset (const juce::File& file);
@@ -71,6 +75,8 @@ private:
     std::atomic<float>* chaosParam = nullptr;
     std::atomic<float>* autoTuneParam = nullptr;
     std::atomic<uint32_t> currentSeed { 0 };
+    std::atomic<double> hostBpm { 0.0 }, hostPpq { 0.0 };
+    std::atomic<bool> hostPlaying { false }, hostHasPpq { false };
     juce::String presetName { "init" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeedProcessor)
