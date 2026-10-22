@@ -25,6 +25,13 @@ Seedling opens on the **home view**: just the tree turning inside a ring of beat
 Colours can be in any order (darkest = background, lightest = text, the most vivid of the rest = neon accent); a pasted coolors.co link in a plain text file works too, and `"roles"` lets you assign each colour yourself.
 * **Old seeds and presets keep working** - new parameters are appended after the existing ones, so a given seed number grows exactly the same patch as before. Presets and host sessions saved by earlier versions load unchanged (mono and glide come up off).
 
+## Install
+Download the installer for your system from the [Releases](../../releases) page (or from the latest Actions run, under *Seedling-installer-...*):
+* **Windows** - `Seedling-<version>-Windows-Setup.exe` installs the VST3 into `C:\Program Files\Common Files\VST3`. Windows SmartScreen may warn because the installer is not code-signed: choose *More info > Run anyway*.
+* **macOS** - `Seedling-<version>-macOS.pkg` (universal: Apple Silicon and Intel) installs into `/Library/Audio/Plug-Ins/VST3`. It is not notarised, so open it with right-click > Open the first time.
+
+Then rescan plug-ins in your host. Uninstall on Windows from *Settings > Apps*; on macOS delete `Seedling.vst3` from the folder above. Presets and skins are in `Documents/Seedling` and are kept.
+
 ## Build
 Easiest: run `build_windows.bat` (Windows) or `./build_macos.sh` (macOS) from this folder. Both need CMake and a C++ compiler (Visual Studio / Xcode tools); JUCE is downloaded automatically.
 
