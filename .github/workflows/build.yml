@@ -51,7 +51,7 @@ jobs:
             if (-not $iscc) { $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1 -ExpandProperty FullName }
             "ISCC: $iscc" | Tee-Object -FilePath $log -Append
             $src = (Resolve-Path build/Seedling_artefacts/Release/VST3/Seedling.vst3).Path
-            & $iscc "/DVer=$env:VERSION" "/DSrc=$src" installer/windows/seedling.iss 2>&1 | Tee-Object -FilePath $log -Append
+            & $iscc "/DSeedVer=$env:VERSION" "/DSrc=$src" installer/windows/seedling.iss 2>&1 | Tee-Object -FilePath $log -Append
             if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
             Move-Item installer/windows/Seedling-*-Windows-Setup.exe dist/
           } catch {

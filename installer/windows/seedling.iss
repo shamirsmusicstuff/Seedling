@@ -1,6 +1,6 @@
-; Inno Setup script. Build:  iscc /DVer=0.2.0 /DSrc=<path to Seedling.vst3 folder> seedling.iss
-#ifndef Ver
-  #define Ver "0.0.0"
+; Inno Setup script. Build:  iscc /DSeedVer=0.2.0 /DSrc=<path to Seedling.vst3 folder> seedling.iss
+#ifndef SeedVer
+  #define SeedVer "0.0.0"
 #endif
 #ifndef Src
   #define Src "..\..\build\Seedling_artefacts\Release\VST3\Seedling.vst3"
@@ -9,7 +9,7 @@
 [Setup]
 AppId={{6B0F8C0E-5EED-4A11-9D3A-5EED11A60001}
 AppName=Seedling
-AppVersion={#Ver}
+AppVersion={#SeedVer}
 AppPublisher=Seedling Audio
 DefaultDirName={commoncf64}\VST3
 DisableDirPage=yes
@@ -18,7 +18,7 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=.
-OutputBaseFilename=Seedling-{#Ver}-Windows-Setup
+OutputBaseFilename=Seedling-{#SeedVer}-Windows-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
