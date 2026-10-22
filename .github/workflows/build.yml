@@ -43,15 +43,26 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install innosetup -y --no-progress
-          $src = (Resolve-Path build/Seedling_artefacts/Release/VST3/Seedling.vst3).Path
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVer=$env:VERSION" "/DSrc=$src" installer/windows/seedling.iss
           New-Item -ItemType Directory -Force dist | Out-Null
-          Move-Item installer/windows/Seedling-*-Windows-Setup.exe dist/
+          $log = "dist/installer-log.txt"
+          try {
+            choco install innosetup -y --no-progress 2>&1 | Tee-Object -FilePath $log -Append
+            $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+            if (-not $iscc) { $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1 -ExpandProperty FullName }
+            "ISCC: $iscc" | Tee-Object -FilePath $log -Append
+            $src = (Resolve-Path build/Seedling_artefacts/Release/VST3/Seedling.vst3).Path
+            & $iscc "/DVer=$env:VERSION" "/DSrc=$src" installer/windows/seedling.iss 2>&1 | Tee-Object -FilePath $log -Append
+            if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+            Move-Item installer/windows/Seedling-*-Windows-Setup.exe dist/
+          } catch {
+            "ERROR: $_" | Tee-Object -FilePath $log -Append
+            exit 1
+          }
       - name: Installer (macOS)
         if: runner.os == 'macOS'
         run: installer/macos/build_pkg.sh "$VERSION" build/Seedling_artefacts/Release/VST3/Seedling.vst3 dist
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: Seedling-installer-${{ matrix.os }}
           path: dist/*
