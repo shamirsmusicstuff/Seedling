@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $log = "dist/installer-log.txt"
+          $log = "installer-log.txt"
           try {
             choco install innosetup -y --no-progress 2>&1 | Tee-Object -FilePath $log -Append
             $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
