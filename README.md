@@ -30,6 +30,8 @@ Download the installer for your system from the [Releases](../../releases) page 
 * **Windows** - `Seedling-<version>-Windows-Setup.exe` installs the VST3 into `C:\Program Files\Common Files\VST3`. Windows SmartScreen may warn because the installer is not code-signed: choose *More info > Run anyway*.
 * **macOS** - `Seedling-<version>-macOS.pkg` (universal: Apple Silicon and Intel) installs into `/Library/Audio/Plug-Ins/VST3`. It is not notarised, so open it with right-click > Open the first time.
 
+Maintainers: in the Actions tab choose *Build Seedling > Run workflow* and tick *Publish a GitHub release* (or push a `v*` tag) and CI attaches both installers to a release.
+
 Then rescan plug-ins in your host. Uninstall on Windows from *Settings > Apps*; on macOS delete `Seedling.vst3` from the folder above. Presets and skins are in `Documents/Seedling` and are kept.
 
 ## Build
