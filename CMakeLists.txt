@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Seedling VERSION 0.2.0 LANGUAGES C CXX)
+project(Seedling VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,10 @@ target_sources(Seedling PRIVATE
 
 target_include_directories(Seedling PRIVATE Source)
 
+# Roboto (SIL Open Font License, see Source/fonts/OFL.txt) is compiled into the plug-in.
+juce_add_binary_data(SeedFonts NAMESPACE SeedFontData HEADER_NAME SeedFontData.h SOURCES
+    Source/fonts/Roboto-Light.ttf Source/fonts/Roboto-Regular.ttf Source/fonts/Roboto-Medium.ttf Source/fonts/Roboto-Bold.ttf)
+
 target_compile_definitions(Seedling PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -82,6 +86,7 @@ endif()
 target_link_libraries(Seedling
     PRIVATE
         juce::juce_audio_processors
+        SeedFonts
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -108,4 +113,4 @@ target_compile_definitions(seedling_snapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE
 if(SEED_MINIMAL_LINUX)
     target_compile_definitions(seedling_snapshot PRIVATE JUCE_USE_XRANDR=0 JUCE_USE_XINERAMA=0 JUCE_USE_XCURSOR=0 JUCE_USE_XRENDER=0 JUCE_USE_XSHM=0)
 endif()
-target_link_libraries(seedling_snapshot PRIVATE juce::juce_audio_processors juce::juce_recommended_config_flags)
+target_link_libraries(seedling_snapshot PRIVATE juce::juce_audio_processors SeedFonts juce::juce_recommended_config_flags)

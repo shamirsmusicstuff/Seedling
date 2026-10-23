@@ -1,11 +1,12 @@
 #include "PluginEditor.h"
+#include "SeedFontData.h"
 #include <complex>
 
 using namespace seed;
 
 namespace
 {
-    constexpr int kWidth = 900, kHeight = 700;
+    constexpr int kWidth = 900, kHeight = 744;
     constexpr int kContentX = 190, kContentY = 52;
     constexpr int kKnobW = 72, kKnobH = 64;
 
@@ -33,8 +34,6 @@ namespace
     { 300, 204 }, { 0, 0 }                                                         // glide (mono is a switch, placed in resized())
     };
 
-    const char* kRoman[3] = { "I.", "II.", "III." };
-
     float hashRnd (int k)
     {
         uint32_t x = (uint32_t) k * 2654435761u;
@@ -42,8 +41,8 @@ namespace
         return (float) (x & 0xffff) / 65535.f;
     }
 
-    void strokeCurve (juce::Graphics& g, const std::vector<juce::Point<float>>& pts, juce::Colour c,
-                      bool fill, float baseY, float thick = 1.8f)
+    void strokeCurve (juce::Graphics& g, const std::vector<juce::Point<float>>& pts, juce::Colour col,
+                      bool fill, float baseY, float thick = 1.6f)
     {
         if (pts.size() < 2) return;
         juce::Path path;
@@ -56,12 +55,10 @@ namespace
             f.lineTo (pts.back().x, baseY);
             f.lineTo (pts.front().x, baseY);
             f.closeSubPath();
-            g.setColour (c.withAlpha (0.2f));
+            g.setColour (col.withAlpha (0.16f));
             g.fillPath (f);
         }
-        g.setColour (c.withAlpha (0.2f));
-        g.strokePath (path, juce::PathStrokeType (thick + 4.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (c);
+        g.setColour (col);
         g.strokePath (path, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
@@ -73,44 +70,38 @@ namespace
         g.fillPath (p);
     }
 
-    // red neon text: a soft halo of offset copies underneath the crisp text
-    void glowText (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, const juce::Font& f,
-                   juce::Colour c, juce::Justification j)
+    // small tracked capitals, the way labels are set throughout the new look
+    void capsText (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, float size, int weight,
+                   juce::Colour col, juce::Justification j, float tracking = 0.14f)
     {
-        g.setFont (f);
-        const float radii[] = { 5.f, 3.f, 1.6f };
-        const float alphas[] = { 0.05f, 0.09f, 0.16f };
-        for (int k = 0; k < 3; ++k)
-            for (int a = 0; a < 8; ++a)
-            {
-                const float ang = (float) a * juce::MathConstants<float>::pi * 0.25f;
-                g.setColour (c.withAlpha (alphas[k]));
-                g.drawText (text, area.translated ((int) std::lround (std::cos (ang) * radii[k]),
-                                                   (int) std::lround (std::sin (ang) * radii[k])), j);
-            }
-        g.setColour (c.interpolatedWith (ui::paper, 0.18f));
-        g.drawText (text, area, j);
+        g.setFont (ui::font (size, weight).withExtraKerningFactor (tracking));
+        g.setColour (col);
+        g.drawText (text.toUpperCase(), area, j);
     }
 }
 
 //==============================================================================
 void ui::apply (const seed::Skin& k) { ink = k.ink; red = k.accent; slate = k.slate; mist = k.mist; paper = k.paper; }
 
-juce::Font ui::serif (float height, bool italic, bool bold)
+juce::Font ui::font (float height, int weight)
 {
-    const int style = (italic ? juce::Font::italic : 0) | (bold ? juce::Font::bold : 0);
-    return juce::Font (juce::FontOptions (juce::Font::getDefaultSerifFontName(), height, style));
+    static juce::Typeface::Ptr faces[4];
+    static bool loaded = false;
+    if (! loaded)
+    {
+        faces[0] = juce::Typeface::createSystemTypefaceFor (SeedFontData::RobotoLight_ttf,   (size_t) SeedFontData::RobotoLight_ttfSize);
+        faces[1] = juce::Typeface::createSystemTypefaceFor (SeedFontData::RobotoRegular_ttf, (size_t) SeedFontData::RobotoRegular_ttfSize);
+        faces[2] = juce::Typeface::createSystemTypefaceFor (SeedFontData::RobotoMedium_ttf,  (size_t) SeedFontData::RobotoMedium_ttfSize);
+        faces[3] = juce::Typeface::createSystemTypefaceFor (SeedFontData::RobotoBold_ttf,    (size_t) SeedFontData::RobotoBold_ttfSize);
+        loaded = true;
+    }
+    const auto& f = faces[juce::jlimit (0, 3, weight)];
+    return f != nullptr ? juce::Font (juce::FontOptions (f).withHeight (height)) : juce::Font (juce::FontOptions (height));
 }
 
-juce::Colour ui::groupColour (int group)
-{
-    switch (group)
-    {
-        case gVol: case gOscA: case gAdj:          return paper;
-        case gMod: case gOscB: case gFlt:          return red;
-        default:                                   return mist;    // env, lfo, fm, mix, sat, reverb
-    }
-}
+juce::Font ui::serif (float height, bool, bool bold) { return font (height, bold ? 2 : 1); }
+
+juce::Colour ui::groupColour (int) { return paper; }       // one ink for every control: the colour comes from the skin's gradient
 
 //==============================================================================
 SeedLookAndFeel::SeedLookAndFeel() { applyPalette(); }
@@ -121,67 +112,63 @@ void SeedLookAndFeel::applyPalette()
     setColour (juce::TextButton::buttonColourId, ink);
     setColour (juce::TextButton::textColourOffId, paper);
     setColour (juce::TextButton::textColourOnId, paper);
-    setColour (juce::TextEditor::backgroundColourId, ink);
+    setColour (juce::TextEditor::backgroundColourId, ink.withAlpha (0.4f));
     setColour (juce::TextEditor::textColourId, paper);
-    setColour (juce::TextEditor::outlineColourId, slate.withAlpha (0.7f));
-    setColour (juce::TextEditor::focusedOutlineColourId, red);
-    setColour (juce::TextEditor::highlightColourId, red.withAlpha (0.5f));
-    setColour (juce::CaretComponent::caretColourId, red);
+    setColour (juce::TextEditor::outlineColourId, paper.withAlpha (0.35f));
+    setColour (juce::TextEditor::focusedOutlineColourId, paper);
+    setColour (juce::TextEditor::highlightColourId, paper.withAlpha (0.3f));
+    setColour (juce::TextEditor::highlightedTextColourId, paper);
+    setColour (juce::CaretComponent::caretColourId, paper);
     setColour (juce::Label::textColourId, paper);
     setColour (juce::BubbleComponent::backgroundColourId, ink);
-    setColour (juce::BubbleComponent::outlineColourId, red);
+    setColour (juce::BubbleComponent::outlineColourId, paper.withAlpha (0.5f));
     setColour (juce::TooltipWindow::backgroundColourId, ink);
-    setColour (juce::TooltipWindow::outlineColourId, red);
+    setColour (juce::TooltipWindow::outlineColourId, paper.withAlpha (0.5f));
     setColour (juce::TooltipWindow::textColourId, paper);
     setColour (juce::PopupMenu::backgroundColourId, ink);
     setColour (juce::PopupMenu::textColourId, paper);
-    setColour (juce::PopupMenu::headerTextColourId, mist);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, red);
+    setColour (juce::PopupMenu::headerTextColourId, paper.withAlpha (0.7f));
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, paper.withAlpha (0.18f));
     setColour (juce::PopupMenu::highlightedTextColourId, paper);
-    setColour (juce::TextButton::buttonColourId, ink);
-    setColour (juce::TextButton::textColourOffId, paper);
-    setColour (juce::TextButton::textColourOnId, paper);
 }
 
 void SeedLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                                         float startAngle, float endAngle, juce::Slider& s)
 {
     using namespace ui;
-    const juce::Colour accent = groupColour ((int) s.getProperties()["group"]);
     const bool bipolar = (bool) s.getProperties()["bipolar"];
 
     const auto b = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
     const float cx = b.getCentreX(), cy = b.getCentreY();
-    const float thick = 4.2f;
-    const float r = std::min (b.getWidth(), b.getHeight()) * 0.5f - thick * 0.5f - 1.f;
+    const float thick = 2.2f;
+    const float r = std::min (b.getWidth(), b.getHeight()) * 0.5f - thick * 0.5f - 0.5f;
     const float ang = startAngle + pos * (endAngle - startAngle);
 
     juce::Path track;
     track.addCentredArc (cx, cy, r, r, 0.f, startAngle, endAngle, true);
-    g.setColour (slate.withAlpha (0.4f));
-    g.strokePath (track, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+    g.setColour (paper.withAlpha (0.26f));
+    g.strokePath (track, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
     juce::Path val;
     const float from = bipolar ? startAngle + 0.5f * (endAngle - startAngle) : startAngle;
     if (std::abs (ang - from) > 0.01f)
     {
         val.addCentredArc (cx, cy, r, r, 0.f, std::min (from, ang), std::max (from, ang), true);
-        g.setColour (accent.withAlpha (0.22f));
-        g.strokePath (val, juce::PathStrokeType (thick + 4.f, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
-        g.setColour (accent);
-        g.strokePath (val, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+        g.setColour (paper);
+        g.strokePath (val, juce::PathStrokeType (thick, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
-    const float ri = r - thick * 0.5f - 2.f;
-    g.setGradientFill (juce::ColourGradient (slate.interpolatedWith (ink, 0.45f), cx - ri * 0.4f, cy - ri * 0.5f,
-                                             ink, cx + ri * 0.7f, cy + ri * 0.8f, true));
+    const float ri = r - 5.f;
+    g.setColour (ink.withAlpha (0.85f));
     g.fillEllipse (cx - ri, cy - ri, ri * 2.f, ri * 2.f);
-    g.setColour (slate.withAlpha (0.8f));
-    g.drawEllipse (cx - ri, cy - ri, ri * 2.f, ri * 2.f, 1.f);
+    g.setColour (paper.withAlpha (0.3f));
+    g.drawEllipse (cx - ri, cy - ri, ri * 2.f, ri * 2.f, 1.2f);
 
     g.setColour (paper);
-    g.drawLine (cx + std::sin (ang) * ri * 0.3f, cy - std::cos (ang) * ri * 0.3f,
-                cx + std::sin (ang) * ri * 0.92f, cy - std::cos (ang) * ri * 0.92f, 2.2f);
+    juce::Path pointer;
+    pointer.startNewSubPath (cx + std::sin (ang) * ri * 0.28f, cy - std::cos (ang) * ri * 0.28f);
+    pointer.lineTo (cx + std::sin (ang) * ri * 0.86f, cy - std::cos (ang) * ri * 0.86f);
+    g.strokePath (pointer, juce::PathStrokeType (2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void SeedLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float sliderPos,
@@ -189,53 +176,57 @@ void SeedLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, 
 {
     using namespace ui;
     const float cy = (float) y + (float) h * 0.5f;
-    g.setColour (slate.withAlpha (0.5f));
-    g.fillRoundedRectangle ((float) x, cy - 2.f, (float) w, 4.f, 2.f);
-    g.setColour (red.withAlpha (0.25f));
-    g.fillRoundedRectangle ((float) x, cy - 4.f, sliderPos - (float) x, 8.f, 4.f);
-    g.setColour (red);
-    g.fillRoundedRectangle ((float) x, cy - 2.f, sliderPos - (float) x, 4.f, 2.f);
+    g.setColour (paper.withAlpha (0.3f));
+    g.fillRoundedRectangle ((float) x, cy - 0.8f, (float) w, 1.6f, 0.8f);
     g.setColour (paper);
-    g.fillEllipse (sliderPos - 6.f, cy - 6.f, 12.f, 12.f);
-    g.setColour (red);
-    g.drawEllipse (sliderPos - 6.f, cy - 6.f, 12.f, 12.f, 1.4f);
+    g.fillRoundedRectangle ((float) x, cy - 1.5f, sliderPos - (float) x, 3.f, 1.5f);
+    g.setColour (ink);
+    g.fillEllipse (sliderPos - 7.f, cy - 7.f, 14.f, 14.f);
+    g.setColour (paper);
+    g.drawEllipse (sliderPos - 7.f, cy - 7.f, 14.f, 14.f, 1.5f);
 }
 
 void SeedLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
 {
     using namespace ui;
-    auto r = b.getLocalBounds().toFloat().reduced (1.5f);
-    if (highlighted || down)
-    {
-        g.setColour (red.withAlpha (0.25f));
-        g.fillRoundedRectangle (r.expanded (1.5f), 6.f);
-    }
-    g.setColour (down ? red : ink.interpolatedWith (slate, 0.14f));
-    g.fillRoundedRectangle (r, 4.f);
-    g.setColour (highlighted || down ? paper : red);
-    g.drawRoundedRectangle (r, 4.f, 1.3f);
+    auto r = b.getLocalBounds().toFloat().reduced (1.f);
+    const bool solid = (bool) b.getProperties()["solid"];
+    const float corner = r.getHeight() * 0.5f;
+    g.setColour (solid ? paper.withAlpha (down ? 0.8f : (highlighted ? 0.94f : 1.f))
+                       : paper.withAlpha (down ? 0.22f : (highlighted ? 0.12f : 0.04f)));
+    g.fillRoundedRectangle (r, corner);
+    g.setColour (paper);
+    g.drawRoundedRectangle (r, corner, 1.2f);
 }
 
-juce::Font SeedLookAndFeel::getTextButtonFont (juce::TextButton&, int h) { return ui::serif (h < 22 ? 11.5f : 14.f, false, true).withExtraKerningFactor (0.04f); }
+void SeedLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool)
+{
+    using namespace ui;
+    const bool solid = (bool) b.getProperties()["solid"];
+    const bool small = b.getHeight() < 30;
+    g.setFont (font (small ? 14.f : 11.f, solid ? 3 : 2).withExtraKerningFactor (small ? 0.f : 0.09f));
+    g.setColour (solid ? ink : paper);
+    g.drawText (small ? b.getButtonText() : b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred);
+}
+
+juce::Font SeedLookAndFeel::getTextButtonFont (juce::TextButton&, int h) { return ui::font (h < 30 ? 14.f : 11.f, 2); }
 
 void SeedLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
 {
     using namespace ui;
     const auto r = b.getLocalBounds().toFloat();
-    const float s = 14.f;
+    const float s = 11.f;
     const juce::Rectangle<float> box (r.getX() + 2.f, r.getCentreY() - s * 0.5f, s, s);
-    g.setColour (highlighted ? paper : mist);
-    g.drawRoundedRectangle (box, 3.f, 1.4f);
+    g.setColour (paper.withAlpha (highlighted ? 1.f : 0.8f));
+    g.drawEllipse (box, 1.2f);
     if (b.getToggleState())
     {
-        g.setColour (red.withAlpha (0.3f));
-        g.fillRoundedRectangle (box.expanded (2.f), 4.f);
-        g.setColour (red);
-        g.fillRoundedRectangle (box.reduced (3.f), 2.f);
+        g.setColour (paper);
+        g.fillEllipse (box.reduced (2.6f));
     }
-    g.setColour (mist);
-    g.setFont (serif (14.f));
-    g.drawText (b.getButtonText(), r.withTrimmedLeft (s + 8.f), juce::Justification::centredLeft);
+    g.setColour (paper.withAlpha (0.8f));
+    g.setFont (font (9.5f, 2).withExtraKerningFactor (0.12f));
+    g.drawText (b.getButtonText().toUpperCase(), r.withTrimmedLeft (s + 7.f), juce::Justification::centredLeft);
 }
 
 //==============================================================================
@@ -264,14 +255,14 @@ void Knob::resized() { slider.setBounds ((getWidth() - 46) / 2, 0, 46, 46); }
 void Knob::paint (juce::Graphics& g)
 {
     const auto& d = kParams[paramIndex];
-    g.setFont (ui::serif (13.f));
-    g.setColour (ui::paper.withAlpha (0.88f));
-    g.drawText (d.id, 0, 47, getWidth(), 16, juce::Justification::centred);
+    g.setFont (ui::font (9.5f, 2).withExtraKerningFactor (0.1f));
+    g.setColour (ui::paper.withAlpha (0.85f));
+    g.drawText (juce::String (d.id).toUpperCase(), 0, 48, getWidth(), 14, juce::Justification::centred);
 
     if (d.flags & fStar)
     {
-        g.setColour (ui::red);
-        g.setFont (ui::serif (16.f, false, true));
+        g.setColour (ui::paper);
+        g.setFont (ui::font (14.f, 3));
         g.drawText ("*", slider.getRight() + 1, slider.getY() + 1, 12, 16, juce::Justification::centred);
     }
 }
@@ -286,27 +277,26 @@ void Figure::paint (juce::Graphics& g)
     if (fig.isNotEmpty()) cap = b.removeFromBottom (17.f);
     const auto plot = b.reduced (0.f, 1.f);
 
-    g.setColour (ui::ink);
-    g.fillRoundedRectangle (plot, 3.f);
-    g.setColour (ui::mist.withAlpha (0.07f));                       // graticule
+    g.setColour (ui::ink.withAlpha (0.38f));
+    g.fillRoundedRectangle (plot, 12.f);
+    g.setColour (ui::paper.withAlpha (0.06f));                      // graticule
     for (int i = 1; i < 4; ++i)
     {
-        g.drawLine (plot.getX(), plot.getY() + plot.getHeight() * (float) i / 4.f, plot.getRight(), plot.getY() + plot.getHeight() * (float) i / 4.f, 1.f);
-        g.drawLine (plot.getX() + plot.getWidth() * (float) i / 4.f, plot.getY(), plot.getX() + plot.getWidth() * (float) i / 4.f, plot.getBottom(), 1.f);
+        g.drawLine (plot.getX() + 6.f, plot.getY() + plot.getHeight() * (float) i / 4.f, plot.getRight() - 6.f, plot.getY() + plot.getHeight() * (float) i / 4.f, 1.f);
+        g.drawLine (plot.getX() + plot.getWidth() * (float) i / 4.f, plot.getY() + 6.f, plot.getX() + plot.getWidth() * (float) i / 4.f, plot.getBottom() - 6.f, 1.f);
     }
-    g.setColour (ui::slate.withAlpha (0.7f));
-    g.drawRoundedRectangle (plot.reduced (0.5f), 3.f, 1.f);
+    g.setColour (ui::paper.withAlpha (0.2f));
+    g.drawRoundedRectangle (plot.reduced (0.5f), 12.f, 1.f);
 
-    if (draw) draw (g, plot.reduced (8.f, 7.f));
+    if (draw) draw (g, plot.reduced (10.f, 8.f));
 
     if (fig.isNotEmpty())
     {
-        g.setFont (ui::serif (12.5f, true));
-        g.setColour (ui::slate.brighter (0.3f));
-        g.drawText ("figure " + fig, cap.withWidth (70.f), juce::Justification::centredLeft);
-        g.setColour (ui::mist);
-        g.setFont (ui::serif (12.5f));
-        g.drawText (caption, cap.withTrimmedLeft (72.f), juce::Justification::centredLeft);
+        g.setFont (ui::font (9.5f, 2).withExtraKerningFactor (0.12f));
+        g.setColour (ui::paper.withAlpha (0.6f));
+        g.drawText (("fig " + fig).toUpperCase(), cap.withWidth (50.f).withTrimmedLeft (4.f), juce::Justification::centredLeft);
+        g.setColour (ui::paper.withAlpha (0.85f));
+        g.drawText (caption.toUpperCase(), cap.withTrimmedLeft (54.f), juce::Justification::centredLeft);
     }
 }
 
@@ -557,10 +547,6 @@ void SeedTree::paint (juce::Graphics& g)
     const float eg = 1.f - std::pow (1.f - growth, 3.f);
     const float nearK = 1.f / (2.f * rMax);
 
-    // soil glow under the horizon
-    g.setGradientFill (juce::ColourGradient (red.withAlpha (0.20f), cx, ground, red.withAlpha (0.f), cx, bottom, false));
-    g.fillRect (juce::Rectangle<float> (3.f, ground, w - 6.f, bottom - ground));
-
     // the ground plane: rings and spokes that turn with the tree
     {
         float d, sc;
@@ -573,10 +559,10 @@ void SeedTree::paint (juce::Graphics& g)
                 const auto q = project ({ std::cos (a) * rad * rMax, ground, std::sin (a) * rad * rMax }, d, sc);
                 if (k == 0) ring.startNewSubPath (q); else ring.lineTo (q);
             }
-            g.setColour (rad == 1.f ? red.withAlpha (0.8f) : mist.withAlpha (0.16f));
+            g.setColour (rad == 1.f ? paper.withAlpha (0.35f) : paper.withAlpha (0.12f));
             g.strokePath (ring, juce::PathStrokeType (rad == 1.f ? 1.4f : 1.f));
         }
-        g.setColour (mist.withAlpha (0.12f));
+        g.setColour (paper.withAlpha (0.08f));
         for (int k = 0; k < 12; ++k)
         {
             const float a = (float) k / 12.f * juce::MathConstants<float>::twoPi;
@@ -595,26 +581,24 @@ void SeedTree::paint (juce::Graphics& g)
             const auto q = project ({ std::cos ((float) k / 96.f * twoPi) * R, ground, std::sin ((float) k / 96.f * twoPi) * R }, d, sc);
             if (k == 0) ring.startNewSubPath (q); else ring.lineTo (q);
         }
-        g.setColour (red.withAlpha (0.25f));
-        g.strokePath (ring, juce::PathStrokeType (4.f));
-        g.setColour (red.withAlpha (0.85f));
-        g.strokePath (ring, juce::PathStrokeType (1.2f));
+        g.setColour (paper.withAlpha (0.4f));
+        g.strokePath (ring, juce::PathStrokeType (1.f));
         for (int k = 0; k < 32; ++k)
         {
             const float a = (float) k / 32.f * twoPi, bar = k % 4 == 0 ? 1.f : 0.f;
             const auto p0 = project ({ std::cos (a) * R, ground, std::sin (a) * R }, d, sc);
             const auto p1 = project ({ std::cos (a) * R * (1.f + 0.05f + 0.04f * bar), ground, std::sin (a) * R * (1.f + 0.05f + 0.04f * bar) }, d, sc);
-            g.setColour (mist.withAlpha (0.35f + 0.4f * bar));
-            g.drawLine (juce::Line<float> (p0, p1), 1.f + bar);
+            g.setColour (paper.withAlpha (0.4f + 0.45f * bar));
+            g.drawLine (juce::Line<float> (p0, p1), 1.f + 0.6f * bar);
         }
         const auto bead = project ({ R, ground, 0.f }, d, sc);
-        g.setColour (red.withAlpha (0.35f));
+        g.setColour (paper.withAlpha (0.25f));
         g.fillEllipse (bead.x - 9.f, bead.y - 9.f, 18.f, 18.f);
         g.setColour (paper);
         g.fillEllipse (bead.x - 3.5f, bead.y - 3.5f, 7.f, 7.f);
     }
 
-    // floating spores (the Upside Down)
+    // floating spores
     for (int i = 0; i < 16; ++i)
     {
         const float fx = std::fmod ((float) i * 0.618034f, 1.f);
@@ -705,19 +689,16 @@ void SeedTree::paint (juce::Graphics& g)
                 if (k == 0) path.startNewSubPath (q); else path.lineTo (q);
             }
             const float depthK = 0.45f + 0.55f * juce::jlimit (0.f, 1.f, 0.5f - dm * nearK);   // far side fades
-            const float dim = (home || s.zone == page ? 1.f : 0.5f) * depthK;
-            const float th = s.thick * scm;
-            const juce::Colour c = s.root ? red : (s.thick > 5.f ? mist.interpolatedWith (slate, 0.4f) : mist);
+            const float dim = (home || s.zone == page ? 1.f : 0.55f) * depthK;
+            const float th = std::max (0.7f, s.thick * 0.36f) * scm;                           // fine line work, thicker near the trunk
             const float hv = segHL[(size_t) it.idx];
-            g.setColour (red.withAlpha (0.16f * dim));
-            g.strokePath (path, juce::PathStrokeType (th + 5.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            if (hv > 0.02f)                                        // being edited: neon glow, brighter core
+            if (hv > 0.02f)                                        // being edited: a soft halo and a brighter, heavier line
             {
-                g.setColour (red.withAlpha (0.5f * hv));
-                g.strokePath (path, juce::PathStrokeType (th + 10.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.setColour (paper.withAlpha (0.22f * hv));
+                g.strokePath (path, juce::PathStrokeType (th + 6.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
-            g.setColour (c.interpolatedWith (paper, 0.6f * hv).withAlpha (juce::jlimit (0.f, 1.f, 0.3f + 0.65f * dim + 0.5f * hv)));
-            g.strokePath (path, juce::PathStrokeType (th, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour (paper.withAlpha (juce::jlimit (0.f, 1.f, (s.root ? 0.34f : 0.55f) * dim + 0.45f * hv)));
+            g.strokePath (path, juce::PathStrokeType (th + 0.9f * hv, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         else if (it.kind == 1)
         {
@@ -727,23 +708,25 @@ void SeedTree::paint (juce::Graphics& g)
             const auto pos = project (bez (dsegs[(size_t) n.seg], n.u), d, sc);
             const float v = valueOf ? juce::jlimit (0.f, 1.f, valueOf (n.param)) : 0.5f;
             const bool act = home || kParams[n.param].page == page;
-            const juce::Colour c = groupColour (kParams[n.param].group);
-            const float flick = 0.92f + 0.08f * std::sin (timeS * 17.f + n.phase);
-            const float depthK = 0.5f + 0.5f * juce::jlimit (0.f, 1.f, 0.5f - d * nearK);
+            const float flick = 0.94f + 0.06f * std::sin (timeS * 17.f + n.phase);
+            const float depthK = 0.55f + 0.45f * juce::jlimit (0.f, 1.f, 0.5f - d * nearK);
             const float hv = std::max (hl[n.param], flash[n.param]);
-            const float dim = std::max ((act ? 1.f : 0.45f) * flick * depthK, hv);
-            const float rad = (2.4f + 3.4f * v) * (1.f + 0.45f * hv) * sg * sc;
+            const float dim = std::max ((act ? 1.f : 0.5f) * flick * depthK, hv);
+            const float rad = (2.2f + 2.4f * v) * (1.f + 0.5f * hv) * sg * sc;
 
-            g.setGradientFill (juce::ColourGradient (c.withAlpha ((0.15f + 0.5f * v) * dim), pos.x, pos.y, c.withAlpha (0.f), pos.x + rad * 3.4f, pos.y, true));
-            g.fillEllipse (pos.x - rad * 3.4f, pos.y - rad * 3.4f, rad * 6.8f, rad * 6.8f);
-            g.setColour (ink);
-            g.fillEllipse (pos.x - rad - 1.2f, pos.y - rad - 1.2f, (rad + 1.2f) * 2.f, (rad + 1.2f) * 2.f);
-            g.setColour (c.interpolatedWith (paper, 0.5f * v).withAlpha (juce::jlimit (0.f, 1.f, dim)));
+            if (v > 0.6f || hv > 0.05f)                                        // high values and the one being edited glow
+            {
+                g.setGradientFill (juce::ColourGradient (paper.withAlpha (0.3f * dim + 0.3f * hv), pos.x, pos.y, paper.withAlpha (0.f), pos.x + rad * 3.2f, pos.y, true));
+                g.fillEllipse (pos.x - rad * 3.2f, pos.y - rad * 3.2f, rad * 6.4f, rad * 6.4f);
+            }
+            g.setColour (v > 0.6f ? paper.withAlpha (dim) : ink);
             g.fillEllipse (pos.x - rad, pos.y - rad, rad * 2.f, rad * 2.f);
+            g.setColour (paper.withAlpha (juce::jlimit (0.f, 1.f, dim)));
+            g.drawEllipse (pos.x - rad, pos.y - rad, rad * 2.f, rad * 2.f, 1.2f);
             if (hv > 0.05f)
             {
                 g.setColour (paper.withAlpha (juce::jlimit (0.f, 1.f, hv)));
-                g.drawEllipse (pos.x - rad - 3.f, pos.y - rad - 3.f, (rad + 3.f) * 2.f, (rad + 3.f) * 2.f, 1.4f);
+                g.drawEllipse (pos.x - rad - 3.f, pos.y - rad - 3.f, (rad + 3.f) * 2.f, (rad + 3.f) * 2.f, 1.f);
             }
         }
         else
@@ -751,18 +734,13 @@ void SeedTree::paint (juce::Graphics& g)
             // the seed, pulsing at the base of the trunk
             const juce::Point<float> sp { cx, ground + 16.f };
             const float pulse = 0.5f + 0.5f * std::sin (timeS * 2.2f);
-            g.setGradientFill (juce::ColourGradient (red.withAlpha (0.45f + 0.2f * pulse), sp.x, sp.y, red.withAlpha (0.f), sp.x, sp.y + 22.f, true));
-            g.fillEllipse (sp.x - 22.f, sp.y - 22.f, 44.f, 44.f);
+            g.setGradientFill (juce::ColourGradient (paper.withAlpha (0.28f + 0.14f * pulse), sp.x, sp.y, paper.withAlpha (0.f), sp.x, sp.y + 24.f, true));
+            g.fillEllipse (sp.x - 24.f, sp.y - 24.f, 48.f, 48.f);
             juce::Path seedShape;
-            seedShape.addEllipse (-5.f, -7.5f, 10.f, 15.f);
+            seedShape.addEllipse (-4.f, -6.5f, 8.f, 13.f);
             const auto tf = juce::AffineTransform::rotation (0.45f).translated (sp.x, sp.y);
-            g.setColour (mist.interpolatedWith (slate, 0.25f));
-            g.fillPath (seedShape, tf);
             g.setColour (paper);
-            g.strokePath (seedShape, juce::PathStrokeType (1.2f), tf);
-            g.setColour (ink);
-            juce::Path crack; crack.startNewSubPath (-1.f, -6.f); crack.lineTo (1.f, -1.f); crack.lineTo (-1.f, 3.f);
-            g.strokePath (crack, juce::PathStrokeType (1.f), tf);
+            g.fillPath (seedShape, tf);
         }
     }
 
@@ -774,57 +752,43 @@ void SeedTree::paint (juce::Graphics& g)
         float d, sc;
         const auto pos = project (bez (dsegs[(size_t) n.seg], n.u), d, sc);
         const juce::String txt (kParams[n.param].id);
-        const auto f = serif (12.f, false, true);
-        const float tw = juce::GlyphArrangement::getStringWidth (f, txt) + 10.f;
+        const auto f = font (10.f, 2).withExtraKerningFactor (0.1f);
+        const float tw = juce::GlyphArrangement::getStringWidth (f, txt.toUpperCase()) + 16.f;
         const bool right = pos.x < w * 0.5f;
         juce::Rectangle<float> box (right ? pos.x + 11.f : pos.x - 11.f - tw, pos.y - 9.f, tw, 18.f);
         box = box.withX (juce::jlimit (2.f, w - tw - 2.f, box.getX()));
-        g.setColour (ink.withAlpha (0.9f * hv));
-        g.fillRoundedRectangle (box, 4.f);
-        g.setColour (red.withAlpha (hv));
-        g.drawRoundedRectangle (box, 4.f, 1.2f);
-        g.setFont (f);
+        g.setColour (ink.withAlpha (0.7f * hv));
+        g.fillRoundedRectangle (box, 9.f);
         g.setColour (paper.withAlpha (hv));
-        g.drawText (txt, box, juce::Justification::centred);
+        g.drawRoundedRectangle (box, 9.f, 1.f);
+        g.setFont (font (10.f, 2).withExtraKerningFactor (0.1f));
+        g.drawText (txt.toUpperCase(), box, juce::Justification::centred);
     }
 
-    // page boxes + roman numerals (III on top, growing up from I in the soil)
+    // page zones (editor sidebar): thin dashed bands, the active one lightly filled
     const float zoneTop[3] = { ground, yA, topY };
     const float zoneBot[3] = { bottom, ground, yA };
-    const char* roman[3] = { "I.", "II.", "III." };
+    const char* roman[3] = { "I", "II", "III" };
     for (int pg = 0; pg < 3 && ! home; ++pg)
     {
         const juce::Rectangle<float> zone (3.f, zoneTop[pg] + 1.f, w - 6.f, zoneBot[pg] - zoneTop[pg] - 2.f);
         const bool active = pg == page;
+        if (active) { g.setColour (paper.withAlpha (0.08f)); g.fillRoundedRectangle (zone, 8.f); }
 
-        juce::Path box; box.addRectangle (zone);
+        juce::Path box; box.addRoundedRectangle (zone, 8.f);
         juce::Path dashed;
-        const float dashes[] = { 4.f, 3.f };
+        const float dashes[] = { 3.f, 4.f };
         juce::PathStrokeType (1.f).createDashedStroke (dashed, box, dashes, 2);
-        g.setColour (active ? red : slate.withAlpha (0.55f));
+        g.setColour (paper.withAlpha (active ? 0.75f : 0.25f));
         g.fillPath (dashed);
 
-        auto label = juce::Rectangle<int> ((int) zone.getX() + 5, (int) zone.getY() + 2, 40, 20);
-        if (active) glowText (g, roman[pg], label, serif (17.f, false, true), red, juce::Justification::topLeft);
-        else { g.setFont (serif (17.f)); g.setColour (slate.brighter (0.2f)); g.drawText (roman[pg], label, juce::Justification::topLeft); }
+        capsText (g, roman[pg], { (int) zone.getX() + 10, (int) zone.getY() + 6, 40, 14 }, 10.f, 2, paper.withAlpha (active ? 1.f : 0.55f), juce::Justification::topLeft, 0.16f);
     }
 
-    g.setFont (serif (12.f, true));
-    g.setColour (mist.withAlpha (0.7f));
+    g.setFont (font (10.f, 1));
+    g.setColour (paper.withAlpha (0.7f));
     if (home) g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 26, getWidth() / 2 - 104, 20, juce::Justification::centredRight);
-    else      g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 30, getWidth(), 20, juce::Justification::centred);
-}
-
-//==============================================================================
-void Scanlines::paint (juce::Graphics& g)
-{
-    const auto b = getLocalBounds().toFloat();
-    g.setGradientFill (juce::ColourGradient (ui::ink.withAlpha (0.f), b.getCentreX(), b.getCentreY(),
-                                             ui::ink.withAlpha (0.6f), 0.f, 0.f, true));
-    g.fillRect (b);
-    g.setColour (juce::Colours::black.withAlpha (0.22f));
-    for (float y = 0.f; y < b.getHeight(); y += 3.f)
-        g.fillRect (0.f, y, b.getWidth(), 1.f);
+    else      g.drawText (caption ? caption() : juce::String(), 0, getHeight() - 22, getWidth(), 18, juce::Justification::centred);
 }
 
 //==============================================================================
@@ -884,11 +848,13 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     homeTree.setSeed (proc.getSeed());
 
     editBtn.setTooltip ("Open the sound editor: envelopes, oscillators, filter and effects");
-    editBtn.onClick = [this] { setHomeView (false); };
-    homeBtn.setTooltip ("Back to the spinning tree");
-    homeBtn.onClick = [this] { setHomeView (true); };
+    editBtn.onClick = [this] { setHomeView (! homeView); };
     addAndMakeVisible (editBtn);
-    addChildComponent (homeBtn);
+    for (int i = 0; i < 3; ++i)
+    {
+        tabBtn[i].onClick = [this, i] { setPage (i); };
+        addChildComponent (tabBtn[i]);
+    }
 
     // ---- bottom bar ----------------------------------------------------------------
     randomizeBtn.onClick = [this] { proc.randomizeNew(); refreshLabels(); };
@@ -897,11 +863,12 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     nextBtn.onClick = [this] { proc.stepPreset (+1); refreshLabels(); };
     saveBtn.onClick = [this] { savePresetDialog(); };
     loadBtn.onClick = [this] { loadPresetDialog(); };
+    randomizeBtn.getProperties().set ("solid", true);
     randomizeBtn.setTooltip ("Generate a new random patch (soft and light by default)");
     tuneBtn.setTooltip ("Snap oscillator A to octaves and B to perfect intervals so the keys play in tune");
 
     seedBox.setInputRestrictions (9, "0123456789");
-    seedBox.setFont (ui::serif (14.f));
+    seedBox.setFont (ui::font (13.f, 1));
     seedBox.setJustification (juce::Justification::centred);
     seedBox.setTooltip ("Seed of the current random patch. Type a seed and press Return to recall it.");
     seedBox.onReturnKey = [this]
@@ -918,18 +885,15 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     autoTuneAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kAutoTuneId, autoTuneBtn);
 
     presetLabel.setJustificationType (juce::Justification::centred);
-    presetLabel.setFont (ui::serif (14.f, true));
+    presetLabel.setFont (ui::font (13.f, 2));
     presetLabel.setInterceptsMouseClicks (false, false);
 
-    skinBtn.onClick = [this] { showSkinMenu(); };
-    skinBtn.setTooltip ("Change the colour skin (skins are .seedskin files in Documents/Seedling/Skins)");
     loadSkins();
 
-    for (auto* c : std::initializer_list<juce::Component*> { &skinBtn, &randomizeBtn, &tuneBtn, &prevBtn, &nextBtn, &saveBtn, &loadBtn,
+    for (auto* c : std::initializer_list<juce::Component*> { &randomizeBtn, &tuneBtn, &prevBtn, &nextBtn, &saveBtn, &loadBtn,
                                                               &seedBox, &chaosSlider, &autoTuneBtn, &presetLabel })
         addAndMakeVisible (c);
 
-    addAndMakeVisible (scan);   // on top of everything
     resized();      // setSize() ran before the knobs/figures existed, so lay everything out now
     refreshLabels();
     setPage (0);
@@ -954,13 +918,14 @@ void SeedEditor::setHomeView (bool h)
 {
     homeView = h;
     homeTree.setVisible (h);
-    editBtn.setVisible (h);
     tree.setVisible (! h);
-    homeBtn.setVisible (! h);
-    skinBtn.setBounds (h ? juce::Rectangle<int> (kWidth - 126, 14, 112, 17) : juce::Rectangle<int> (762, 31, 112, 17));
+    editBtn.setButtonText (h ? "Edit sound" : "Tree");
+    editBtn.setTooltip (h ? "Open the sound editor: envelopes, oscillators, filter and effects" : "Back to the spinning tree");
+    for (auto& t : tabBtn) t.setVisible (! h);
     for (auto& k : knobs) k->setVisible (! h && kParams[k->paramIndex].page == page);
     for (auto& f : figures) f.comp->setVisible (! h && f.page == page);
     monoBtn.setVisible (! h && page == 1);
+    rebuildBackdrop();
     repaint();
 }
 
@@ -968,19 +933,23 @@ void SeedEditor::setPage (int newPage)
 {
     page = newPage;
     tree.page = newPage;
+    for (int i = 0; i < 3; ++i) tabBtn[i].getProperties().set ("solid", i == page);
+    for (auto& t : tabBtn) t.repaint();
     for (auto& k : knobs) k->setVisible (! homeView && kParams[k->paramIndex].page == page);
     for (auto& f : figures) f.comp->setVisible (! homeView && f.page == page);
     monoBtn.setVisible (! homeView && page == 1);
     repaint();
 }
 
+juce::Rectangle<int> SeedEditor::chipRect (int i) const
+{
+    return juce::Rectangle<int> (26, 26).withCentre ({ 760 + 28 * i, 26 });
+}
+
 void SeedEditor::resized()
 {
-    tree.setBounds (8, 8, 164, 624);
-    homeTree.setBounds (0, 8, kWidth, 624);
-    editBtn.setBounds (kWidth / 2 - 90, 598, 180, 32);
-    homeBtn.setBounds (690, 31, 66, 17);
-    scan.setBounds (getLocalBounds());
+    tree.setBounds (8, 8, 164, 632);
+    homeTree.setBounds (0, 8, kWidth, 632);
 
     for (auto& k : knobs)
     {
@@ -990,21 +959,22 @@ void SeedEditor::resized()
     for (auto& f : figures)
         f.comp->setBounds (f.rect.translated (kContentX, kContentY));
 
-    const int y = 650, h = 30;
-    randomizeBtn.setBounds (14, y, 96, h);
-    seedBox.setBounds (118, y + 2, 84, h - 4);
-    softLabelRect = { 210, y, 32, h };
-    chaosSlider.setBounds (242, y, 92, h);
-    wildLabelRect = { 336, y, 32, h };
-    tuneBtn.setBounds (378, y, 104, h);
-    autoTuneBtn.setBounds (490, y, 96, h);
+    // row 1: five equal pills; row 2: small controls
+    const int bw = 116, bh = 40, gap = 10, x0 = (kWidth - (5 * bw + 4 * gap)) / 2, y = 652;
+    juce::TextButton* row[5] = { &tuneBtn, &saveBtn, &loadBtn, &randomizeBtn, &editBtn };
+    for (int i = 0; i < 5; ++i) row[i]->setBounds (x0 + i * (bw + gap), y, bw, bh);
 
-    prevBtn.setBounds (606, y, 26, h);
-    presetLabel.setBounds (634, y, 128, h);
-    nextBtn.setBounds (764, y, 26, h);
-    saveBtn.setBounds (798, y, 46, h);
-    loadBtn.setBounds (848, y, 42, h);
-    skinBtn.setBounds (homeView ? juce::Rectangle<int> (kWidth - 126, 14, 112, 17) : juce::Rectangle<int> (762, 31, 112, 17));
+    const int y2 = 702, h2 = 28;
+    seedBox.setBounds (x0, y2, 84, h2);
+    softLabelRect = { x0 + 96, y2, 32, h2 };
+    chaosSlider.setBounds (x0 + 130, y2, 100, h2);
+    wildLabelRect = { x0 + 234, y2, 32, h2 };
+    autoTuneBtn.setBounds (x0 + 290, y2, 100, h2);
+    prevBtn.setBounds (x0 + 420, y2, 26, h2);
+    presetLabel.setBounds (x0 + 450, y2, 124, h2);
+    nextBtn.setBounds (x0 + 578, y2, 26, h2);
+
+    for (int i = 0; i < 3; ++i) tabBtn[i].setBounds (kContentX + i * 156, 10, 148, 32);
     monoBtn.setBounds (kContentX + 388, kContentY + 222, 84, 24);
 }
 
@@ -1044,9 +1014,7 @@ void SeedEditor::loadSkins()
     const seed::Skin* pick = &skinList.front();
     for (auto& k : skinList) if (k.name == skinName) { pick = &k; break; }
     chooseSkin (pick->name);
-
-    if (problems.size() > 0)
-        skinBtn.setTooltip ("Skins that could not be read: " + problems.joinIntoString ("; "));
+    skinProblems = problems.joinIntoString ("; ");
 }
 
 void SeedEditor::chooseSkin (const juce::String& name)
@@ -1057,10 +1025,9 @@ void SeedEditor::chooseSkin (const juce::String& name)
             skinName = name;
             ui::apply (k);
             lnf.applyPalette();
-            skinBtn.setButtonText ("skin: " + name);
             seed::skins::saveCurrentName (name);
             sendLookAndFeelChange();
-            scan.repaint();
+            rebuildBackdrop();
             repaint();
             return;
         }
@@ -1076,13 +1043,78 @@ void SeedEditor::showSkinMenu()
     m.addItem (2, "Reload skins");
 
     juce::Component::SafePointer<SeedEditor> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&skinBtn), [safe] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (chipRect (3))), [safe] (int r)
     {
         if (safe == nullptr || r == 0) return;
         if (r == 1) seed::skins::dir().revealToUser();
         else if (r == 2) safe->loadSkins();
         else if (r >= 100 && (size_t) (r - 100) < safe->skinList.size()) safe->chooseSkin (safe->skinList[(size_t) (r - 100)].name);
     });
+}
+
+void SeedEditor::mouseUp (const juce::MouseEvent& e)
+{
+    const int n = (int) std::min<size_t> (4, skinList.size());
+    for (int i = 0; i < n; ++i)
+        if (chipRect (i).contains (e.getPosition()))
+        {
+            if (i == 3 && skinList.size() > 4) showSkinMenu();
+            else chooseSkin (skinList[(size_t) i].name);
+            return;
+        }
+    if (e.mods.isPopupMenu() && chipRect (0).getUnion (chipRect (3)).contains (e.getPosition())) showSkinMenu();
+}
+
+// The whole window is one soft gradient: ink base, big blurred blobs of the skin's other colours, film grain, vignette.
+void SeedEditor::rebuildBackdrop()
+{
+    using namespace ui;
+    backdropHome = homeView;
+    backdrop = juce::Image (juce::Image::ARGB, kWidth, kHeight, true);
+    juce::Graphics g (backdrop);
+    g.fillAll (ink);
+
+    auto blob = [&g] (juce::Colour c, float cx, float cy, float r, float a)
+    {
+        juce::ColourGradient gr (c.withAlpha (a), cx, cy, c.withAlpha (0.f), cx + r, cy, true);
+        gr.addColour (0.45, c.withAlpha (a * 0.55f));
+        g.setGradientFill (gr);
+        g.fillRect (0.f, 0.f, (float) kWidth, (float) kHeight);
+    };
+    const float W = (float) kWidth, H = (float) kHeight;
+    if (homeView)
+    {
+        blob (red,   W * 0.12f, H * 0.92f, 520.f, 0.85f);
+        blob (slate, W * 0.88f, H * 0.12f, 470.f, 0.85f);
+        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.22f);
+        blob (red,   W * 0.92f, H * 0.98f, 400.f, 0.65f);
+    }
+    else
+    {
+        blob (red,   W * 0.88f, H * 0.92f, 520.f, 0.85f);
+        blob (slate, W * 0.10f, H * 0.10f, 470.f, 0.85f);
+        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.18f);
+        blob (red,   W * 0.06f, H * 0.98f, 400.f, 0.65f);
+    }
+
+    // grain
+    juce::Random rnd (7);
+    juce::Image::BitmapData bd (backdrop, juce::Image::BitmapData::readWrite);
+    for (int y = 0; y < kHeight; ++y)
+        for (int x = 0; x < kWidth; ++x)
+        {
+            const int d = rnd.nextInt (13) - 6;
+            auto c = bd.getPixelColour (x, y);
+            bd.setPixelColour (x, y, juce::Colour ((juce::uint8) juce::jlimit (0, 255, c.getRed() + d), (juce::uint8) juce::jlimit (0, 255, c.getGreen() + d),
+                                                    (juce::uint8) juce::jlimit (0, 255, c.getBlue() + d), (juce::uint8) 255));
+        }
+
+    // vignette
+    juce::Graphics g2 (backdrop);
+    juce::ColourGradient v (juce::Colours::transparentBlack, W * 0.5f, H * 0.5f, juce::Colours::black.withAlpha (0.45f), 0.f, 0.f, true);
+    v.addColour (0.55, juce::Colours::transparentBlack);
+    g2.setGradientFill (v);
+    g2.fillRect (0.f, 0.f, W, H);
 }
 
 void SeedEditor::savePresetDialog()
@@ -1120,53 +1152,44 @@ void SeedEditor::loadPresetDialog()
 void SeedEditor::paint (juce::Graphics& g)
 {
     using namespace ui;
-    g.fillAll (ink);
-    g.setGradientFill (juce::ColourGradient (ink.interpolatedWith (slate, 0.22f), (float) kWidth * 0.62f, 300.f,
-                                             ink, 0.f, 0.f, true));
-    g.fillRect (getLocalBounds());
+    if (! backdrop.isValid() || backdropHome != homeView) rebuildBackdrop();
+    g.drawImageAt (backdrop, 0, 0);
 
     if (homeView)
+        capsText (g, "Seedling", { 26, 14, 300, 24 }, 14.f, 3, paper, juce::Justification::centredLeft, 0.32f);
+
+    // skin chips
+    const int n = (int) std::min<size_t> (4, skinList.size());
+    for (int i = 0; i < n; ++i)
     {
-        glowText (g, "SEEDLING", { 0, 8, kWidth, 40 }, serif (30.f, false, true).withExtraKerningFactor (0.3f), red, juce::Justification::centred);
-        for (float y : { 9.f, 47.f })
+        const auto r = chipRect (i).toFloat();
+        const auto& k = skinList[(size_t) i];
+        const auto c = r.reduced (4.5f);
+        juce::ColourGradient gr (k.accent, c.getX(), c.getBottom(), k.ink, c.getRight(), c.getY(), false);
+        g.setGradientFill (gr);
+        g.fillEllipse (c);
+        g.setColour (paper.withAlpha (0.55f));
+        g.drawEllipse (c, 1.f);
+        if (k.name == skinName)
         {
-            g.setColour (red.withAlpha (0.3f));
-            g.drawLine (250.f, y, 650.f, y, 3.f);
-            g.setColour (red);
-            g.drawLine (250.f, y, 650.f, y, 1.f);
+            g.setColour (paper);
+            g.drawEllipse (r.reduced (1.f), 1.2f);
+        }
+        if (i == 3 && skinList.size() > 4)
+        {
+            g.setColour (paper);
+            g.setFont (font (12.f, 3));
+            g.drawText ("...", chipRect (i), juce::Justification::centred);
         }
     }
 
-    // panel behind the content
-    const juce::Rectangle<float> panel (homeView ? 0.f : 178.f, 6.f, homeView ? 0.f : (float) kWidth - 190.f, homeView ? 0.f : 626.f);
-    g.setColour (ink.interpolatedWith (slate, 0.12f));
-    g.fillRoundedRectangle (panel, 6.f);
-    g.setColour (slate.withAlpha (0.55f));
-    g.drawRoundedRectangle (panel.reduced (0.5f), 6.f, 1.f);
-
-    // neon page title between two thin red rules
-    if (! homeView) {
-    const juce::String title = (juce::String (kRoman[page]) + "   " + kPageTitles[page]).toUpperCase();
-    glowText (g, title, { kContentX, 10, 480, 36 }, serif (25.f, false, true).withExtraKerningFactor (0.14f), red, juce::Justification::centred);
-    for (float y : { 9.f, 47.f })
-    {
-        g.setColour (red.withAlpha (0.3f));
-        g.drawLine (230.f, y, 630.f, y, 3.f);
-        g.setColour (red);
-        g.drawLine (230.f, y, 630.f, y, 1.f);
-    }
-
-    // wordmark
-    glowText (g, "SEEDLING", { 690, 8, 184, 26 }, serif (20.f, false, true).withExtraKerningFactor (0.2f), red, juce::Justification::centredRight);
-
-    }
     // signal-flow arrows on the oscillator page
     if (! homeView && page == 1)
     {
-        g.setColour (mist.withAlpha (0.55f));
+        g.setColour (paper.withAlpha (0.5f));
         const float ox = (float) kContentX, oy = (float) kContentY;
 
-        g.drawLine (ox + 576.f, oy + 136.f, ox + 576.f, oy + 192.f, 1.3f);
+        g.drawLine (ox + 576.f, oy + 136.f, ox + 576.f, oy + 192.f, 1.2f);
         arrowHead (g, { ox + 576.f, oy + 202.f }, false);
 
         juce::Path conn;
@@ -1174,19 +1197,15 @@ void SeedEditor::paint (juce::Graphics& g)
         conn.lineTo (ox + 330.f, oy + 280.f);
         conn.lineTo (ox + 51.f, oy + 280.f);
         conn.lineTo (ox + 51.f, oy + 276.f);
-        g.strokePath (conn, juce::PathStrokeType (1.3f));
+        g.strokePath (conn, juce::PathStrokeType (1.2f));
         arrowHead (g, { ox + 51.f, oy + 268.f }, true);
     }
 
     // bottom bar
-    g.setColour (red.withAlpha (0.25f));
-    g.drawLine (14.f, 640.f, (float) kWidth - 10.f, 640.f, 3.f);
-    g.setColour (red.withAlpha (0.8f));
-    g.drawLine (14.f, 640.f, (float) kWidth - 10.f, 640.f, 1.f);
-    g.setColour (mist.withAlpha (0.7f));
-    g.setFont (serif (13.f, true));
-    g.drawText ("soft", softLabelRect, juce::Justification::centredRight);
-    g.drawText ("wild", wildLabelRect, juce::Justification::centredLeft);
+    g.setColour (paper.withAlpha (0.22f));
+    g.drawLine (138.f, 644.f, (float) kWidth - 138.f, 644.f, 1.f);
+    capsText (g, "soft", softLabelRect, 9.f, 2, paper.withAlpha (0.75f), juce::Justification::centredRight);
+    capsText (g, "wild", wildLabelRect, 9.f, 2, paper.withAlpha (0.75f), juce::Justification::centredLeft);
 }
 
 //==============================================================================
@@ -1258,7 +1277,7 @@ void SeedEditor::drawVibrato (juce::Graphics& g, juce::Rectangle<float> r)
         const float v = d.vibSemis * std::sin (kTwoPi * d.lfoHz * t) * ramp;     // -1..1 semitone
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getCentreY() - v * r.getHeight() * 0.45f });
     }
-    strokeCurve (g, pts, ui::mist, false, 0.f, 1.6f);
+    strokeCurve (g, pts, ui::paper, false, 0.f, 1.6f);
 }
 
 void SeedEditor::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
@@ -1275,7 +1294,7 @@ void SeedEditor::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
         const float gain = 1.f - d.tremDepth * 0.5f * (1.f - lfo);               // 1-depth .. 1
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getBottom() - gain * r.getHeight() * 0.9f });
     }
-    strokeCurve (g, pts, ui::mist, true, r.getBottom(), 1.6f);
+    strokeCurve (g, pts, ui::paper, true, r.getBottom(), 1.6f);
 }
 
 void SeedEditor::drawOsc (juce::Graphics& g, juce::Rectangle<float> r, bool isB)
@@ -1293,7 +1312,7 @@ void SeedEditor::drawOsc (juce::Graphics& g, juce::Rectangle<float> r, bool isB)
         const float v = morphShape (isB, form, ph, 0.f);
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getCentreY() - v * r.getHeight() * 0.42f });
     }
-    g.setColour (ui::slate.withAlpha (0.4f));
+    g.setColour (ui::paper.withAlpha (0.4f));
     g.drawLine (r.getX(), r.getCentreY(), r.getRight(), r.getCentreY(), 1.f);
     strokeCurve (g, pts, ui::groupColour (isB ? gOscB : gOscA), false, 0.f, 2.f);
 }
@@ -1323,7 +1342,7 @@ void SeedEditor::drawFilter (juce::Graphics& g, juce::Rectangle<float> r)
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getBottom() - y01 * r.getHeight() });
     }
     const float zeroDb = r.getBottom() - (48.f / 72.f) * r.getHeight();
-    g.setColour (ui::slate.withAlpha (0.55f));
+    g.setColour (ui::paper.withAlpha (0.55f));
     g.drawLine (r.getX(), zeroDb, r.getRight(), zeroDb, 1.f);
     strokeCurve (g, pts, ui::groupColour (gFlt), true, r.getBottom());
 }
@@ -1332,10 +1351,10 @@ void SeedEditor::drawSaturate (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const float side = std::min (r.getWidth(), r.getHeight());
     const auto sq = juce::Rectangle<float> (side, side).withCentre (r.getCentre());
-    g.setColour (ui::slate.withAlpha (0.6f));
+    g.setColour (ui::paper.withAlpha (0.6f));
     g.drawLine (sq.getX(), sq.getCentreY(), sq.getRight(), sq.getCentreY(), 1.f);
     g.drawLine (sq.getCentreX(), sq.getY(), sq.getCentreX(), sq.getBottom(), 1.f);
-    g.setColour (ui::slate.withAlpha (0.3f));
+    g.setColour (ui::paper.withAlpha (0.3f));
     g.drawLine (sq.getX(), sq.getBottom(), sq.getRight(), sq.getY(), 1.f);   // identity
 
     std::vector<juce::Point<float>> pts;
@@ -1356,7 +1375,7 @@ void SeedEditor::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
     const int bars = std::max (30, (int) (r.getWidth() / 3.5f));
 
     std::vector<juce::Point<float>> env;
-    g.setColour (ui::mist.withAlpha (0.55f));
+    g.setColour (ui::paper.withAlpha (0.55f));
     for (int k = 0; k < bars; ++k)
     {
         const float t = T * (float) k / (float) bars;
@@ -1385,7 +1404,7 @@ void SeedEditor::drawEq (juce::Graphics& g, juce::Rectangle<float> r)
         const float y01 = juce::jlimit (0.f, 1.f, 0.5f + db / 30.f);
         pts.push_back ({ r.getX() + r.getWidth() * (float) i / (float) N, r.getBottom() - y01 * r.getHeight() });
     }
-    g.setColour (ui::slate.withAlpha (0.45f));
+    g.setColour (ui::paper.withAlpha (0.45f));
     g.drawLine (r.getX(), r.getCentreY(), r.getRight(), r.getCentreY(), 1.f);
     strokeCurve (g, pts, ui::groupColour (gAdj), true, r.getCentreY(), 1.8f);
 }

@@ -19,7 +19,8 @@ namespace ui
     inline juce::Colour paper { 0xffecebf3 };
 
     void apply (const seed::Skin&);
-    juce::Font serif (float height, bool italic = false, bool bold = false);
+    juce::Font serif (float height, bool italic = false, bool bold = false);     // kept for old call sites: Roboto regular / medium
+    juce::Font font (float height, int weight = 1);                              // Roboto: 0 light, 1 regular, 2 medium, 3 bold
     juce::Colour groupColour (int group);
 }
 
@@ -34,6 +35,7 @@ public:
     void drawLinearSlider (juce::Graphics&, int x, int y, int width, int height, float sliderPos,
                            float minSliderPos, float maxSliderPos, juce::Slider::SliderStyle, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool highlighted, bool down) override;
+    void drawButtonText (juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
     void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
     void applyPalette();     // re-read the ui:: colours (after a skin change)
@@ -134,14 +136,6 @@ private:
     float topY = 8.f, H = 0.f, yA = 0.f, ground = 0.f, rMax = 60.f;
 };
 
-// CRT scanlines + vignette laid over the whole editor (never takes mouse clicks).
-class Scanlines : public juce::Component
-{
-public:
-    Scanlines() { setInterceptsMouseClicks (false, false); setBufferedToImage (true); }
-    void paint (juce::Graphics&) override;
-};
-
 //==============================================================================
 class SeedEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
@@ -157,8 +151,9 @@ public:
     void setSpinForTest (float r) { tree.setSpin (r); homeTree.setSpin (r); }
     void showHomeForTest (bool h) { setHomeView (h); }
     bool isHomeView() const { return homeView; }
-    void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinBtn.setButtonText ("skin: " + k.name); lnf.applyPalette(); sendLookAndFeelChange(); scan.repaint(); repaint(); }
+    void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinName = k.name; lnf.applyPalette(); sendLookAndFeelChange(); rebuildBackdrop(); repaint(); }
     void syncForTest() { timerCallback(); }
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
@@ -168,6 +163,9 @@ private:
     void loadSkins();
     void chooseSkin (const juce::String& name);
     void showSkinMenu();
+    void rebuildBackdrop();
+    void layoutChrome();
+    juce::Rectangle<int> chipRect (int i) const;
     void savePresetDialog();
     void loadPresetDialog();
 
@@ -202,27 +200,28 @@ private:
 
     SeedTree tree, homeTree;
     bool homeView = true;
-    juce::TextButton editBtn { "EDIT SOUND" }, homeBtn { "< tree" };
-    Scanlines scan;
+    juce::TextButton editBtn { "Edit sound" };
+    juce::Image backdrop;
+    bool backdropHome = true;
+    juce::TextButton tabBtn[3] { juce::TextButton ("I  Envelope + LFO"), juce::TextButton ("II  Oscillators"), juce::TextButton ("III  Filter + FX") };
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<FigureEntry> figures;
 
-    juce::TextButton randomizeBtn { "Randomize" }, tuneBtn { "Correct Tune" },
-                     prevBtn { "<" }, nextBtn { ">" }, saveBtn { "Save" }, loadBtn { "Load" };
+    juce::TextButton randomizeBtn { "Randomize" }, tuneBtn { "Tune" },
+                     prevBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")) }, nextBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")) }, saveBtn { "Save" }, loadBtn { "Load" };
     juce::TextEditor seedBox;
     juce::Slider chaosSlider;
     juce::ToggleButton autoTuneBtn { "auto-tune" };
     juce::ToggleButton monoBtn { "mono" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
-    juce::TextButton skinBtn { "skin" };
     std::vector<seed::Skin> skinList;
-    juce::String skinName;
+    juce::String skinName, skinProblems;
     juce::Label presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chaosAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoTuneAttach;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> softLabelRect, wildLabelRect;
+    juce::Rectangle<int> softLabelRect, wildLabelRect, seedCaptionRect;
     juce::String lastPresetShown;
     uint32_t lastSeedShown = 0xffffffffu;
 
