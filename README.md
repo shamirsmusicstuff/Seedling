@@ -1,6 +1,6 @@
 # Seedling
 
-A random-patch synth VST3 (soft and light by default). Every knob from the three pictured pages:
+A random-patch synth, as VST3 (Windows, macOS) and Audio Unit (macOS), soft and light by default. Every knob from the three pictured pages:
 I. Envelope and LFO, II. Oscillators, III. Filter and effects. The pages are picked on a tree grown from a seed: roots = I, trunk and branches = II, canopy = III. Every parameter is a glowing bulb on the tree; each seed grows its own tree. Styled after 80s sci-fi: CRT screens, red neon, scanlines.
 
 ## Screenshots
@@ -28,17 +28,17 @@ Colours can be in any order (darkest = background, lightest = text, the most viv
 ## Install
 Download the installer for your system from the [Releases](../../releases) page (or from the latest Actions run, under *Seedling-installer-...*):
 * **Windows** - `Seedling-<version>-Windows-Setup.exe` installs the VST3 into `C:\Program Files\Common Files\VST3`. Windows SmartScreen may warn because the installer is not code-signed: choose *More info > Run anyway*.
-* **macOS** - `Seedling-<version>-macOS.pkg` (universal: Apple Silicon and Intel) installs into `/Library/Audio/Plug-Ins/VST3`. It is not notarised, so open it with right-click > Open the first time.
+* **macOS** - `Seedling-<version>-macOS.pkg` (universal: Apple Silicon and Intel) installs **VST3** into `/Library/Audio/Plug-Ins/VST3` and the **Audio Unit** into `/Library/Audio/Plug-Ins/Components` (use the AU in Logic Pro, GarageBand and MainStage; use the VST3 in Ableton, Reaper, Bitwig and others). Both are ticked by default; untick one on the *Customize* screen if you only want one. It is not notarised, so open it with right-click > Open the first time.
 
 Maintainers: in the Actions tab choose *Build Seedling > Run workflow* and tick *Publish a GitHub release* (or push a `v*` tag) and CI attaches both installers to a release.
 
-Then rescan plug-ins in your host. Uninstall on Windows from *Settings > Apps*; on macOS delete `Seedling.vst3` from the folder above. Presets and skins are in `Documents/Seedling` and are kept.
+Then rescan plug-ins in your host (Logic: *Settings > Plug-in Manager > Reset & Rescan*). Uninstall on Windows from *Settings > Apps*; on macOS delete `Seedling.vst3` and `Seedling.component` from the folders above. Presets and skins are in `Documents/Seedling` and are kept.
 
 ## Build
 Easiest: run `build_windows.bat` (Windows) or `./build_macos.sh` (macOS) from this folder. Both need CMake and a C++ compiler (Visual Studio / Xcode tools); JUCE is downloaded automatically.
 
 Windows / macOS: push to GitHub and download the artifact from the Actions tab (`.github/workflows/build.yml`),
-or locally: `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release --target Seedling_VST3`.
+or locally: `cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release --target Seedling_VST3` (on macOS add `Seedling_AU` for the Audio Unit).
 Copy `Seedling.vst3` into your VST3 folder (Windows: `C:\Program Files\Common Files\VST3`, macOS: `~/Library/Audio/Plug-Ins/VST3`).
 
 ## Tests

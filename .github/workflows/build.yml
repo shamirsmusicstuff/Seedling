@@ -39,11 +39,29 @@ jobs:
           cmake --build build --config Release --target seed_compat_test
           ctest --test-dir build -C Release -R seed_compat --output-on-failure
       - name: Build
-        run: cmake --build build --config Release --target Seedling_VST3 -j 4
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake --build build --config Release --target Seedling_VST3 Seedling_AU -j 4   # VST3 + Audio Unit
+          else
+            cmake --build build --config Release --target Seedling_VST3 -j 4
+          fi
+      - name: Audio Unit validation (auval)
+        if: runner.os == 'macOS'
+        continue-on-error: true          # informational: hosted runners can be too locked down to register AUs
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/Seedling_artefacts/Release/AU/Seedling.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -a | grep -i seedl || true
+          auval -v aumu Sdl1 SdSy 2>&1 | tail -40
       - uses: actions/upload-artifact@v4
         with:
           name: Seedling-${{ matrix.os }}
-          path: build/Seedling_artefacts/Release/VST3/Seedling.vst3
+          path: |
+            build/Seedling_artefacts/Release/VST3/Seedling.vst3
+            build/Seedling_artefacts/Release/AU/Seedling.component
+          if-no-files-found: error
       - name: Installer (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -67,7 +85,7 @@ jobs:
           }
       - name: Installer (macOS)
         if: runner.os == 'macOS'
-        run: installer/macos/build_pkg.sh "$VERSION" build/Seedling_artefacts/Release/VST3/Seedling.vst3 dist
+        run: installer/macos/build_pkg.sh "$VERSION" build/Seedling_artefacts/Release/VST3/Seedling.vst3 build/Seedling_artefacts/Release/AU/Seedling.component dist
       - uses: actions/upload-artifact@v4
         if: always()
         with:
