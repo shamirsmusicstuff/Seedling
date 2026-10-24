@@ -5,20 +5,20 @@
 #include <memory>
 #include <vector>
 #include "PluginProcessor.h"
-#include "Skins.h"
+#include "Palette.h"
 
 //==============================================================================
 namespace ui
 {
-    // The current skin. Defaults to the original palette: https://coolors.co/0c120c-c20114-6d7275-c7d6d5-ecebf3
-    // ink = background, red = the neon accent colour (whatever the skin makes it), slate = lines, mist = secondary, paper = text
+    // The current palette (it follows the patch seed). Defaults to the original palette: https://coolors.co/0c120c-c20114-6d7275-c7d6d5-ecebf3
+    // ink = background, red = the neon accent colour (whatever the seed makes it), slate = lines, mist = secondary, paper = text
     inline juce::Colour ink   { 0xff0c120c };
     inline juce::Colour red   { 0xffc20114 };
     inline juce::Colour slate { 0xff6d7275 };
     inline juce::Colour mist  { 0xffc7d6d5 };
     inline juce::Colour paper { 0xffecebf3 };
 
-    void apply (const seed::Skin&);
+    void apply (const seed::Palette&);
     juce::Font serif (float height, bool italic = false, bool bold = false);     // kept for old call sites: Roboto regular / medium
     juce::Font font (float height, int weight = 1);                              // Roboto: 0 light, 1 regular, 2 medium, 3 bold
     juce::Colour groupColour (int group);
@@ -38,7 +38,7 @@ public:
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
     void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
-    void applyPalette();     // re-read the ui:: colours (after a skin change)
+    void applyPalette();     // re-read the ui:: colours (after a palette change)
 };
 
 //==============================================================================
@@ -151,18 +151,16 @@ public:
     void setSpinForTest (float r) { tree.setSpin (r); homeTree.setSpin (r); }
     void showHomeForTest (bool h) { setHomeView (h); }
     bool isHomeView() const { return homeView; }
-    void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinName = k.name; lnf.applyPalette(); sendLookAndFeelChange(); rebuildBackdrop(); repaint(); }
+    void setSeedPaletteForTest (uint32_t sd) { paletteSeed = sd; palGliding = false; showPalette (seed::palette::fromSeed (sd)); }
     void syncForTest() { timerCallback(); }
-    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     void timerCallback() override;
     void setPage (int newPage);
     void setHomeView (bool home);
     void refreshLabels();
-    void loadSkins();
-    void chooseSkin (const juce::String& name);
-    void showSkinMenu();
+    void showPalette (const seed::Palette&);
+    void followSeed();
     void rebuildBackdrop();
     void layoutChrome();
     juce::Rectangle<int> chipRect (int i) const;
@@ -214,8 +212,10 @@ private:
     juce::ToggleButton autoTuneBtn { "auto-tune" };
     juce::ToggleButton monoBtn { "mono" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
-    std::vector<seed::Skin> skinList;
-    juce::String skinName, skinProblems;
+    seed::Palette palShown = seed::palette::original(), palFrom = seed::palette::original(), palTo = seed::palette::original();
+    uint32_t paletteSeed = 0;
+    float palT = 1.f;
+    bool palGliding = false;
     juce::Label presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chaosAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoTuneAttach;
