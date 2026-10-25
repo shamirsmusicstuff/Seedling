@@ -995,9 +995,16 @@ void SeedEditor::refreshLabels()
 void SeedEditor::timerCallback()
 {
     {
+        // The gradient drifts in beats, like the tree turns: at the host tempo (120 bpm with no host), and locked to the
+        // song position while the transport runs, so it stops when the song stops being played back and follows a seek.
         const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
-        if (lastDriftClock > 0.0) driftT += (float) std::min (0.25, now - lastDriftClock);     // a stalled host must not make it jump
+        const double dt = lastDriftClock > 0.0 ? std::min (0.25, now - lastDriftClock) : 0.0;     // a stalled host must not make it jump
         lastDriftClock = now;
+        const auto h = proc.getHostInfo();
+        const double bpm = h.bpm > 20.0 ? h.bpm : 120.0;
+        driftT += dt * bpm / 60.0;
+        if (h.playing && h.hasPpq)
+            driftT += (h.ppq - driftT) * 0.2;
         repaint();
     }
     bool changed = false;
@@ -1049,7 +1056,7 @@ void SeedEditor::followSeed()
 }
 
 // The whole window is one soft gradient: ink base, big blurred blobs of the seed's other colours that drift slowly
-// around (painted live, every frame), then film grain and a vignette (built once).
+// around (painted live, every frame) in time with the host tempo, then film grain and a vignette (built once).
 void SeedEditor::rebuildBackdrop()
 {
     if (backdrop.isValid()) return;
@@ -1080,15 +1087,15 @@ void SeedEditor::paintBackdrop (juce::Graphics& g)
     g.fillAll (ink);
 
     const float W = (float) kWidth, H = (float) kHeight;
-    const float t = driftT;
+    const double t = driftT;
 
     // one blob: a home position, a drift radius and its own slow loop (periods between roughly 50 s and 2 min)
-    auto blob = [&] (juce::Colour c, float cx, float cy, float r, float a, float driftX, float driftY, float periodS, float phase)
+    auto blob = [&] (juce::Colour c, float cx, float cy, float r, float a, float driftX, float driftY, float periodBeats, float phase)
     {
-        const float w = juce::MathConstants<float>::twoPi / periodS;
-        const float x = cx + driftX * std::sin (t * w + phase);
-        const float y = cy + driftY * std::cos (t * w * 0.83f + phase * 1.7f);
-        const float rr = r * (1.f + 0.08f * std::sin (t * w * 1.3f + phase));
+        const double w = juce::MathConstants<double>::twoPi / (double) periodBeats;
+        const float x = cx + driftX * (float) std::sin (t * w + phase);
+        const float y = cy + driftY * (float) std::cos (t * w * 0.83 + phase * 1.7);
+        const float rr = r * (1.f + 0.08f * (float) std::sin (t * w * 1.3 + phase));
         juce::ColourGradient gr (c.withAlpha (a), x, y, c.withAlpha (0.f), x + rr, y, true);
         gr.addColour (0.45, c.withAlpha (a * 0.55f));
         g.setGradientFill (gr);
@@ -1097,17 +1104,17 @@ void SeedEditor::paintBackdrop (juce::Graphics& g)
 
     if (homeView)
     {
-        blob (red,   W * 0.12f, H * 0.92f, 520.f, 0.85f, 150.f, 110.f,  71.f, 0.0f);
-        blob (slate, W * 0.88f, H * 0.12f, 470.f, 0.85f, 130.f, 120.f,  93.f, 1.9f);
-        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.22f, 220.f, 160.f, 117.f, 3.4f);
-        blob (red,   W * 0.92f, H * 0.98f, 400.f, 0.65f, 140.f,  90.f,  59.f, 4.6f);
+        blob (red,   W * 0.12f, H * 0.92f, 520.f, 0.85f, 150.f, 110.f,  128.f, 0.0f);
+        blob (slate, W * 0.88f, H * 0.12f, 470.f, 0.85f, 130.f, 120.f,  160.f, 1.9f);
+        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.22f, 220.f, 160.f, 192.f, 3.4f);
+        blob (red,   W * 0.92f, H * 0.98f, 400.f, 0.65f, 140.f,  90.f,  96.f, 4.6f);
     }
     else
     {
-        blob (red,   W * 0.88f, H * 0.92f, 520.f, 0.85f, 150.f, 110.f,  71.f, 0.0f);
-        blob (slate, W * 0.10f, H * 0.10f, 470.f, 0.85f, 130.f, 120.f,  93.f, 1.9f);
-        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.18f, 220.f, 160.f, 117.f, 3.4f);
-        blob (red,   W * 0.06f, H * 0.98f, 400.f, 0.65f, 140.f,  90.f,  59.f, 4.6f);
+        blob (red,   W * 0.88f, H * 0.92f, 520.f, 0.85f, 150.f, 110.f,  128.f, 0.0f);
+        blob (slate, W * 0.10f, H * 0.10f, 470.f, 0.85f, 130.f, 120.f,  160.f, 1.9f);
+        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.18f, 220.f, 160.f, 192.f, 3.4f);
+        blob (red,   W * 0.06f, H * 0.98f, 400.f, 0.65f, 140.f,  90.f,  96.f, 4.6f);
     }
 
     rebuildBackdrop();

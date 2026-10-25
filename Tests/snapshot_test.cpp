@@ -288,7 +288,7 @@ int main (int argc, char** argv)
     {
         editor->showHomeForTest (true);
         editor->setSeedPaletteForTest (29);
-        auto shot = [&] (float t) { editor->setDriftForTest (t); return editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f); };
+        auto shot = [&] (double t) { editor->setDriftForTest (t); return editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f); };
         auto diff = [] (const juce::Image& a, const juce::Image& b)
         {
             int d = 0;
@@ -297,12 +297,12 @@ int main (int argc, char** argv)
                     if (a.getPixelAt (x, y).getRed() != b.getPixelAt (x, y).getRed()) ++d;
             return d;
         };
-        const auto t0 = shot (0.f), t0b = shot (0.f), t5 = shot (5.f), t30 = shot (30.f);
+        const auto t0 = shot (0.0), t0b = shot (0.0), t5 = shot (5.0), t30 = shot (30.0);
         CHECK (diff (t0, t0b) == 0, "same drift time must give the same picture");
-        CHECK (diff (t0, t5) > 500, "gradient did not move in 5 s");
+        CHECK (diff (t0, t5) > 500, "gradient did not move in 5 beats");
         CHECK (diff (t0, t30) > diff (t0, t5), "gradient should keep travelling");
-        std::printf ("drift: 5 s moves %d px, 30 s moves %d px (sampled)\n", diff (t0, t5), diff (t0, t30));
-        editor->setDriftForTest (0.f);
+        std::printf ("drift: 5 beats move %d px, 30 beats move %d px (sampled)\n", diff (t0, t5), diff (t0, t30));
+        editor->setDriftForTest (0.0);
         editor->setSeedPaletteForTest (0);
     }
 
