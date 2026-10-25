@@ -106,9 +106,14 @@ jobs:
           pattern: Seedling-installer-*
           merge-multiple: true
           path: dist
+      - name: Mark the installers as the seed-colours edition
+        run: |
+          cd dist
+          for f in Seedling-*; do mv "$f" "${f/Seedling-/Seedling-SeedColors-}"; done
+          ls
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', env.VERSION) }}
-          name: Seedling ${{ env.VERSION }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}-seed-colors', env.VERSION) }}
+          name: Seedling ${{ env.VERSION }} (seed colours)
           files: dist/*
           generate_release_notes: true
