@@ -4,11 +4,13 @@ A random-patch synth, as VST3 (Windows, macOS) and Audio Unit (macOS), soft and 
 I. Envelope and LFO, II. Oscillators, III. Filter and effects. The pages are picked on a tree grown from a seed: roots = I, trunk and branches = II, canopy = III. Every parameter is a glowing bulb on the tree; each seed grows its own tree. Styled after 80s sci-fi: CRT screens, red neon, scanlines.
 
 ## Screenshots
-Seedling opens on the **home view**: the tree turning inside a ring of beat ticks over a full-window gradient built from the current skin. Tune, Save, Load, Randomize and Edit sound sit in one row of equal pills, with the seed box, soft/wild, auto-tune and preset arrows below; the four dots top right switch skin. **Edit sound** opens the three-page editor (tabs I / II / III, frosted cards, the tree as a sidebar); **Tree** brings you back. Both views in every built-in skin (Seedling, Skin 1, Skin 2, Skin 3, left to right, top to bottom):
+> **This is the `seed-colors` branch.** There are no skins and no custom colours here: every seed grows its own colours. Seed 0 (no seed yet) is the original Seedling palette; the same seed always gives the same palette, on every machine. The `main` branch keeps the skins.
 
-![Home view in all skins](docs/skins-home.png)
+Seedling opens on the **home view**: the tree turning inside a ring of beat ticks over a full-window gradient. Tune, Save, Load, Randomize and Edit sound sit in one row of equal pills, with the seed box, soft/wild, auto-tune and preset arrows below; the five dots top right show the current seed's colours. **Edit sound** opens the three-page editor (tabs I / II / III, frosted cards, the tree as a sidebar); **Tree** brings you back. Seeds 0, 7, 29 and 4242 (left to right, top to bottom):
 
-![Sound editor in all skins](docs/skins-editor.png)
+![Home view, four seeds](docs/seeds-home.png)
+
+![Sound editor, four seeds](docs/seeds-editor.png)
 
 (`seedling_snapshot` regenerates the individual PNGs; see Tests.)
 
@@ -18,11 +20,7 @@ Seedling opens on the **home view**: the tree turning inside a ring of beat tick
 * **Branches move with the sound** - in the editor, the branch carrying a parameter's bulb stretches and lifts as the value rises and shortens and droops as it falls (twigs beyond it follow). Hovering or dragging a control lights its branch and the path back to the seed and names the bulb.
 * **3D tree** - the page selector is a tree turning slowly in 3D, one revolution every 8 bars (32 beats) of the host tempo. While the host plays it is locked to the song position; when stopped it keeps turning at the host tempo (120 bpm if the host gives none).
 * **Mono + glide** (page II) - the *mono* switch makes the synth monophonic with last-note priority. Playing a key while another is held slides to it legato (envelopes keep running); letting go of the top key slides back to the key still held. *glide* sets the slide time from off to about 3 s, and in mono mode each new note also slides from where the last one was. Randomize leaves mono and glide alone.
-* **Skins** - a skin is just five colours, the same as a coolors.co palette. Pick one with the dots at the top right (right-click them, or the last dot when you have more than four, for the full list). Skins are small text files in `Documents/Seedling/Skins` - copy one, change the name and the five hex colours, then choose *Reload skins*. Included: Seedling (the original), Skin 1, Skin 2, Skin 3. See the README.txt that Seedling writes into that folder.
-```
-{ "name": "My Skin", "colors": ["202030", "39304A", "635C51", "7D7461", "B0A990"] }
-```
-Colours can be in any order (darkest = background, lightest = text, the most vivid of the rest = neon accent); a pasted coolors.co link in a plain text file works too, and `"roles"` lets you assign each colour yourself.
+* **Seed colours** - the palette is built from the seed in OKLCH (ink, accent, slate, mist, paper) with contrast guaranteed: text on the background >= 10:1, on the accent >= 4.5:1, on slate >= 5.5:1. Press Randomize or type a seed and the window glides to the new colours. The palette uses its own hash, so it never changes the sound a seed grows. `seed_palette_test` checks 60,000 seeds in CI.
 * **Old seeds and presets keep working** - new parameters are appended after the existing ones, so a given seed number grows exactly the same patch as before. Presets and host sessions saved by earlier versions load unchanged (mono and glide come up off).
 
 ## Install
@@ -32,7 +30,7 @@ Download the installer for your system from the [Releases](../../releases) page 
 
 Maintainers: in the Actions tab choose *Build Seedling > Run workflow* and tick *Publish a GitHub release* (or push a `v*` tag) and CI attaches both installers to a release.
 
-Then rescan plug-ins in your host (Logic: *Settings > Plug-in Manager > Reset & Rescan*). Uninstall on Windows from *Settings > Apps*; on macOS delete `Seedling.vst3` and `Seedling.component` from the folders above. Presets and skins are in `Documents/Seedling` and are kept.
+Then rescan plug-ins in your host (Logic: *Settings > Plug-in Manager > Reset & Rescan*). Uninstall on Windows from *Settings > Apps*; on macOS delete `Seedling.vst3` and `Seedling.component` from the folders above. Presets is in `Documents/Seedling` and are kept.
 
 ## Build
 Easiest: run `build_windows.bat` (Windows) or `./build_macos.sh` (macOS) from this folder. Both need CMake and a C++ compiler (Visual Studio / Xcode tools); JUCE is downloaded automatically.
@@ -43,7 +41,7 @@ Copy `Seedling.vst3` into your VST3 folder (Windows: `C:\Program Files\Common Fi
 
 ## Tests
 * `cmake --build build --target seed_engine_test && ctest` - tuning accuracy, random-patch stability and levels.
-* `cmake --build build --target seedling_snapshot` - renders the home view and the three pages to PNG (including the README screenshots in every skin) and checks presets / Correct Tune / skins.
+* `cmake --build build --target seedling_snapshot` - renders the home view and the three pages to PNG (including the README screenshots for four seeds) and checks presets / Correct Tune / seed colours.
 
 ## Fonts
 

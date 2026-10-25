@@ -1085,7 +1085,7 @@ void SeedEditor::rebuildBackdrop()
             for (int x = 0; x < kWidth; ++x)
             {
                 const int d = rnd.nextInt (13) - 6;
-                bd.setPixelColour (x, y, d >= 0 ? juce::Colour (255, 255, 255, (juce::uint8) (d * 2)) : juce::Colour (0, 0, 0, (juce::uint8) (-d * 2)));
+                bd.setPixelColour (x, y, d >= 0 ? juce::Colour ((juce::uint8) 255, (juce::uint8) 255, (juce::uint8) 255, (juce::uint8) (d * 2)) : juce::Colour ((juce::uint8) 0, (juce::uint8) 0, (juce::uint8) 0, (juce::uint8) (-d * 2)));
             }
     }
     g.drawImageAt (grain, 0, 0);
