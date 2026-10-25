@@ -323,6 +323,28 @@ int main (int argc, char** argv)
         std::printf ("wrote README screenshots to %s\n", dir.getFullPathName().toRawUTF8());
     }
 
+    // --- the background gradient drifts slowly, and is repeatable for a given moment ------------------------
+    {
+        editor->showHomeForTest (true);
+        editor->setSkinForTest (seed::skins::builtins()[2]);
+        auto shot = [&] (float t) { editor->setDriftForTest (t); return editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f); };
+        auto diff = [] (const juce::Image& a, const juce::Image& b)
+        {
+            int d = 0;
+            for (int y = 0; y < a.getHeight(); y += 4)
+                for (int x = 0; x < a.getWidth(); x += 4)
+                    if (a.getPixelAt (x, y).getRed() != b.getPixelAt (x, y).getRed()) ++d;
+            return d;
+        };
+        const auto t0 = shot (0.f), t0b = shot (0.f), t5 = shot (5.f), t30 = shot (30.f);
+        CHECK (diff (t0, t0b) == 0, "same drift time must give the same picture");
+        CHECK (diff (t0, t5) > 500, "gradient did not move in 5 s");
+        CHECK (diff (t0, t30) > diff (t0, t5), "gradient should keep travelling");
+        std::printf ("drift: 5 s moves %d px, 30 s moves %d px (sampled)\n", diff (t0, t5), diff (t0, t30));
+        editor->setDriftForTest (0.f);
+        editor->setSkinForTest (seed::skins::builtins().front());
+    }
+
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);
     ed.reset();
     return failures == 0 ? 0 : 1;
