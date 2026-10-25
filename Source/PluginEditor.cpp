@@ -994,6 +994,12 @@ void SeedEditor::refreshLabels()
 
 void SeedEditor::timerCallback()
 {
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        if (lastDriftClock > 0.0) driftT += (float) std::min (0.25, now - lastDriftClock);     // a stalled host must not make it jump
+        lastDriftClock = now;
+        repaint();
+    }
     bool changed = false;
     for (int i = 0; i < kNumParams; ++i)
     {
@@ -1042,60 +1048,70 @@ void SeedEditor::followSeed()
     }
 }
 
-// The whole window is one soft gradient: ink base, big blurred blobs of the seed's other colours, film grain, vignette.
+// The whole window is one soft gradient: ink base, big blurred blobs of the seed's other colours that drift slowly
+// around (painted live, every frame), then film grain and a vignette (built once).
 void SeedEditor::rebuildBackdrop()
 {
-    using namespace ui;
-    backdropHome = homeView;
-    backdrop = juce::Image (juce::Image::ARGB, kWidth, kHeight, true);
-    juce::Graphics g (backdrop);
-    g.fillAll (ink);
-
-    auto blob = [&g] (juce::Colour c, float cx, float cy, float r, float a)
-    {
-        juce::ColourGradient gr (c.withAlpha (a), cx, cy, c.withAlpha (0.f), cx + r, cy, true);
-        gr.addColour (0.45, c.withAlpha (a * 0.55f));
-        g.setGradientFill (gr);
-        g.fillRect (0.f, 0.f, (float) kWidth, (float) kHeight);
-    };
+    if (backdrop.isValid()) return;
     const float W = (float) kWidth, H = (float) kHeight;
-    if (homeView)
-    {
-        blob (red,   W * 0.12f, H * 0.92f, 520.f, 0.85f);
-        blob (slate, W * 0.88f, H * 0.12f, 470.f, 0.85f);
-        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.22f);
-        blob (red,   W * 0.92f, H * 0.98f, 400.f, 0.65f);
-    }
-    else
-    {
-        blob (red,   W * 0.88f, H * 0.92f, 520.f, 0.85f);
-        blob (slate, W * 0.10f, H * 0.10f, 470.f, 0.85f);
-        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.18f);
-        blob (red,   W * 0.06f, H * 0.98f, 400.f, 0.65f);
-    }
+    backdrop = juce::Image (juce::Image::ARGB, kWidth, kHeight, true);
 
-    // grain (generated once, then laid over every rebuild)
-    static juce::Image grain;
-    if (! grain.isValid())
     {
-        grain = juce::Image (juce::Image::ARGB, kWidth, kHeight, true);
         juce::Random rnd (7);
-        juce::Image::BitmapData bd (grain, juce::Image::BitmapData::writeOnly);
+        juce::Image::BitmapData bd (backdrop, juce::Image::BitmapData::writeOnly);
         for (int y = 0; y < kHeight; ++y)
             for (int x = 0; x < kWidth; ++x)
             {
                 const int d = rnd.nextInt (13) - 6;
-                bd.setPixelColour (x, y, d >= 0 ? juce::Colour ((juce::uint8) 255, (juce::uint8) 255, (juce::uint8) 255, (juce::uint8) (d * 2)) : juce::Colour ((juce::uint8) 0, (juce::uint8) 0, (juce::uint8) 0, (juce::uint8) (-d * 2)));
+                bd.setPixelColour (x, y, d >= 0 ? juce::Colour ((juce::uint8) 255, (juce::uint8) 255, (juce::uint8) 255, (juce::uint8) (d * 2))
+                                                : juce::Colour ((juce::uint8) 0, (juce::uint8) 0, (juce::uint8) 0, (juce::uint8) (-d * 2)));
             }
     }
-    g.drawImageAt (grain, 0, 0);
-
-    // vignette
-    juce::Graphics& g2 = g;
+    juce::Graphics g (backdrop);
     juce::ColourGradient v (juce::Colours::transparentBlack, W * 0.5f, H * 0.5f, juce::Colours::black.withAlpha (0.45f), 0.f, 0.f, true);
     v.addColour (0.55, juce::Colours::transparentBlack);
-    g2.setGradientFill (v);
-    g2.fillRect (0.f, 0.f, W, H);
+    g.setGradientFill (v);
+    g.fillRect (0.f, 0.f, W, H);
+}
+
+void SeedEditor::paintBackdrop (juce::Graphics& g)
+{
+    using namespace ui;
+    g.fillAll (ink);
+
+    const float W = (float) kWidth, H = (float) kHeight;
+    const float t = driftT;
+
+    // one blob: a home position, a drift radius and its own slow loop (periods between roughly 50 s and 2 min)
+    auto blob = [&] (juce::Colour c, float cx, float cy, float r, float a, float driftX, float driftY, float periodS, float phase)
+    {
+        const float w = juce::MathConstants<float>::twoPi / periodS;
+        const float x = cx + driftX * std::sin (t * w + phase);
+        const float y = cy + driftY * std::cos (t * w * 0.83f + phase * 1.7f);
+        const float rr = r * (1.f + 0.08f * std::sin (t * w * 1.3f + phase));
+        juce::ColourGradient gr (c.withAlpha (a), x, y, c.withAlpha (0.f), x + rr, y, true);
+        gr.addColour (0.45, c.withAlpha (a * 0.55f));
+        g.setGradientFill (gr);
+        g.fillRect (0.f, 0.f, W, H);
+    };
+
+    if (homeView)
+    {
+        blob (red,   W * 0.12f, H * 0.92f, 520.f, 0.85f, 150.f, 110.f,  71.f, 0.0f);
+        blob (slate, W * 0.88f, H * 0.12f, 470.f, 0.85f, 130.f, 120.f,  93.f, 1.9f);
+        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.22f, 220.f, 160.f, 117.f, 3.4f);
+        blob (red,   W * 0.92f, H * 0.98f, 400.f, 0.65f, 140.f,  90.f,  59.f, 4.6f);
+    }
+    else
+    {
+        blob (red,   W * 0.88f, H * 0.92f, 520.f, 0.85f, 150.f, 110.f,  71.f, 0.0f);
+        blob (slate, W * 0.10f, H * 0.10f, 470.f, 0.85f, 130.f, 120.f,  93.f, 1.9f);
+        blob (mist,  W * 0.50f, H * 0.50f, 380.f, 0.18f, 220.f, 160.f, 117.f, 3.4f);
+        blob (red,   W * 0.06f, H * 0.98f, 400.f, 0.65f, 140.f,  90.f,  59.f, 4.6f);
+    }
+
+    rebuildBackdrop();
+    g.drawImageAt (backdrop, 0, 0);
 }
 
 void SeedEditor::savePresetDialog()
@@ -1133,8 +1149,7 @@ void SeedEditor::loadPresetDialog()
 void SeedEditor::paint (juce::Graphics& g)
 {
     using namespace ui;
-    if (! backdrop.isValid() || backdropHome != homeView) rebuildBackdrop();
-    g.drawImageAt (backdrop, 0, 0);
+    paintBackdrop (g);
 
     if (homeView)
         capsText (g, "Seedling", { 26, 14, 300, 24 }, 14.f, 3, paper, juce::Justification::centredLeft, 0.32f);
