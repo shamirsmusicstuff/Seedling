@@ -152,8 +152,8 @@ public:
     void showHomeForTest (bool h) { setHomeView (h); }
     bool isHomeView() const { return homeView; }
     void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinName = k.name; lnf.applyPalette(); sendLookAndFeelChange(); rebuildBackdrop(); repaint(); }
-    void syncForTest() { timerCallback(); driftT = 0.f; }
-    void setDriftForTest (float seconds) { driftT = seconds; lastDriftClock = 0.0; }
+    void syncForTest() { timerCallback(); driftT = 0.0; }
+    void setDriftForTest (double beats) { driftT = beats; lastDriftClock = 0.0; }
     void mouseUp (const juce::MouseEvent&) override;
 
 private:
@@ -204,7 +204,7 @@ private:
     bool homeView = true;
     juce::TextButton editBtn { "Edit sound" };
     juce::Image backdrop;
-    float driftT = 0.f;                 // seconds of gradient drift (0 in the screenshot tests = home positions)
+    double driftT = 0.0;                // beats of gradient drift (0 in the screenshot tests = home positions)
     double lastDriftClock = 0.0;
     juce::TextButton tabBtn[3] { juce::TextButton ("I  Envelope + LFO"), juce::TextButton ("II  Oscillators"), juce::TextButton ("III  Filter + FX") };
     std::vector<std::unique_ptr<Knob>> knobs;
