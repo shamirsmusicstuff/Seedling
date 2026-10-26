@@ -38,6 +38,10 @@ jobs:
         run: |
           cmake --build build --config Release --target seed_compat_test
           ctest --test-dir build -C Release -R seed_compat --output-on-failure
+      - name: Seed palette test (every seed must give readable colours)
+        run: |
+          cmake --build build --config Release --target seed_palette_test
+          ctest --test-dir build -C Release -R seed_palette --output-on-failure
       - name: Build
         shell: bash
         run: |
