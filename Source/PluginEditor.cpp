@@ -796,11 +796,10 @@ void SeedTree::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), proc (p)
+SeedView::SeedView (SeedProcessor& p) : proc (p)
 {
     setLookAndFeel (&lnf);
     setSize (kWidth, kHeight);
-    setResizable (false, false);
 
     proc.ensureFactoryPresets();
 
@@ -906,20 +905,20 @@ SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), pro
     startTimerHz (20);
 }
 
-SeedEditor::~SeedEditor()
+SeedView::~SeedView()
 {
     stopTimer();
     setLookAndFeel (nullptr);
 }
 
-void SeedEditor::addFigure (int pg, juce::Rectangle<int> rect, const juce::String& fig, const juce::String& title, Figure::DrawFn fn)
+void SeedView::addFigure (int pg, juce::Rectangle<int> rect, const juce::String& fig, const juce::String& title, Figure::DrawFn fn)
 {
     FigureEntry e { std::make_unique<Figure> (fig, title, std::move (fn)), pg, rect };
     addChildComponent (*e.comp);
     figures.push_back (std::move (e));
 }
 
-void SeedEditor::setHomeView (bool h)
+void SeedView::setHomeView (bool h)
 {
     homeView = h;
     homeTree.setVisible (h);
@@ -934,7 +933,7 @@ void SeedEditor::setHomeView (bool h)
     repaint();
 }
 
-void SeedEditor::setPage (int newPage)
+void SeedView::setPage (int newPage)
 {
     page = newPage;
     tree.page = newPage;
@@ -946,12 +945,12 @@ void SeedEditor::setPage (int newPage)
     repaint();
 }
 
-juce::Rectangle<int> SeedEditor::chipRect (int i) const
+juce::Rectangle<int> SeedView::chipRect (int i) const
 {
     return juce::Rectangle<int> (26, 26).withCentre ({ 720 + 26 * i, 26 });
 }
 
-void SeedEditor::resized()
+void SeedView::resized()
 {
     tree.setBounds (8, 8, 164, 632);
     homeTree.setBounds (0, 8, kWidth, 632);
@@ -983,7 +982,7 @@ void SeedEditor::resized()
     monoBtn.setBounds (kContentX + 388, kContentY + 222, 84, 24);
 }
 
-void SeedEditor::refreshLabels()
+void SeedView::refreshLabels()
 {
     lastPresetShown = proc.getPresetName();
     presetLabel.setText (lastPresetShown, juce::dontSendNotification);
@@ -992,7 +991,7 @@ void SeedEditor::refreshLabels()
         seedBox.setText (lastSeedShown > 0 ? juce::String (lastSeedShown) : juce::String(), juce::dontSendNotification);
 }
 
-void SeedEditor::timerCallback()
+void SeedView::timerCallback()
 {
     {
         // The gradient drifts in beats, like the tree turns: at the host tempo (120 bpm with no host), and locked to the
@@ -1025,7 +1024,7 @@ void SeedEditor::timerCallback()
 }
 
 // The palette follows the seed. A new seed glides to its colours over about half a second.
-void SeedEditor::showPalette (const seed::Palette& p)
+void SeedView::showPalette (const seed::Palette& p)
 {
     palShown = p;
     ui::apply (p);
@@ -1035,7 +1034,7 @@ void SeedEditor::showPalette (const seed::Palette& p)
     repaint();
 }
 
-void SeedEditor::followSeed()
+void SeedView::followSeed()
 {
     const uint32_t sd = proc.getSeed();
     if (sd != paletteSeed)
@@ -1057,7 +1056,7 @@ void SeedEditor::followSeed()
 
 // The whole window is one soft gradient: ink base, big blurred blobs of the seed's other colours that drift slowly
 // around (painted live, every frame) in time with the host tempo, then film grain and a vignette (built once).
-void SeedEditor::rebuildBackdrop()
+void SeedView::rebuildBackdrop()
 {
     if (backdrop.isValid()) return;
     const float W = (float) kWidth, H = (float) kHeight;
@@ -1081,7 +1080,7 @@ void SeedEditor::rebuildBackdrop()
     g.fillRect (0.f, 0.f, W, H);
 }
 
-void SeedEditor::paintBackdrop (juce::Graphics& g)
+void SeedView::paintBackdrop (juce::Graphics& g)
 {
     using namespace ui;
     g.fillAll (ink);
@@ -1121,12 +1120,12 @@ void SeedEditor::paintBackdrop (juce::Graphics& g)
     g.drawImageAt (backdrop, 0, 0);
 }
 
-void SeedEditor::savePresetDialog()
+void SeedView::savePresetDialog()
 {
     chooser = std::make_unique<juce::FileChooser> ("Save preset",
                                                    proc.getPresetDirectory().getChildFile (proc.getPresetName() + ".seedling"),
                                                    "*.seedling");
-    juce::Component::SafePointer<SeedEditor> safe (this);
+    juce::Component::SafePointer<SeedView> safe (this);
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                               | juce::FileBrowserComponent::warnAboutOverwriting,
                           [safe] (const juce::FileChooser& fc)
@@ -1138,10 +1137,10 @@ void SeedEditor::savePresetDialog()
                           });
 }
 
-void SeedEditor::loadPresetDialog()
+void SeedView::loadPresetDialog()
 {
     chooser = std::make_unique<juce::FileChooser> ("Load preset", proc.getPresetDirectory(), "*.seedling");
-    juce::Component::SafePointer<SeedEditor> safe (this);
+    juce::Component::SafePointer<SeedView> safe (this);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [safe] (const juce::FileChooser& fc)
                           {
@@ -1153,7 +1152,7 @@ void SeedEditor::loadPresetDialog()
 }
 
 //==============================================================================
-void SeedEditor::paint (juce::Graphics& g)
+void SeedView::paint (juce::Graphics& g)
 {
     using namespace ui;
     paintBackdrop (g);
@@ -1202,7 +1201,7 @@ void SeedEditor::paint (juce::Graphics& g)
 //==============================================================================
 // Figures
 //==============================================================================
-void SeedEditor::drawVolEnv (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawVolEnv (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
     const float vs = d.envScale;
@@ -1232,7 +1231,7 @@ void SeedEditor::drawVolEnv (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, pts, ui::groupColour (gVol), true, r.getBottom());
 }
 
-void SeedEditor::drawModEnv (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawModEnv (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
     const float vs = d.envScale;
@@ -1255,7 +1254,7 @@ void SeedEditor::drawModEnv (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, pts, ui::groupColour (gMod), true, r.getBottom());
 }
 
-void SeedEditor::drawVibrato (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawVibrato (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
     const int N = std::max (40, (int) r.getWidth() * 2);
@@ -1271,7 +1270,7 @@ void SeedEditor::drawVibrato (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, pts, ui::paper, false, 0.f, 1.6f);
 }
 
-void SeedEditor::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
     const int N = std::max (40, (int) r.getWidth() * 2);
@@ -1288,7 +1287,7 @@ void SeedEditor::drawTremolo (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, pts, ui::paper, true, r.getBottom(), 1.6f);
 }
 
-void SeedEditor::drawOsc (juce::Graphics& g, juce::Rectangle<float> r, bool isB)
+void SeedView::drawOsc (juce::Graphics& g, juce::Rectangle<float> r, bool isB)
 {
     const auto& d = dv;
     const float form = isB ? d.bForm : d.aForm;
@@ -1308,7 +1307,7 @@ void SeedEditor::drawOsc (juce::Graphics& g, juce::Rectangle<float> r, bool isB)
     strokeCurve (g, pts, ui::groupColour (isB ? gOscB : gOscA), false, 0.f, 2.f);
 }
 
-void SeedEditor::drawFilter (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawFilter (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
     const float w = d.fltType * 2.f;
@@ -1338,7 +1337,7 @@ void SeedEditor::drawFilter (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, pts, ui::groupColour (gFlt), true, r.getBottom());
 }
 
-void SeedEditor::drawSaturate (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawSaturate (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const float side = std::min (r.getWidth(), r.getHeight());
     const auto sq = juce::Rectangle<float> (side, side).withCentre (r.getCentre());
@@ -1358,7 +1357,7 @@ void SeedEditor::drawSaturate (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, pts, ui::groupColour (gSat), false, 0.f, 2.f);
 }
 
-void SeedEditor::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
     const float T = d.rvbRt60 * 0.55f;
@@ -1380,7 +1379,7 @@ void SeedEditor::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
     strokeCurve (g, env, ui::groupColour (gRvb), true, r.getBottom(), 1.2f);
 }
 
-void SeedEditor::drawEq (juce::Graphics& g, juce::Rectangle<float> r)
+void SeedView::drawEq (juce::Graphics& g, juce::Rectangle<float> r)
 {
     Biquad low, high;
     low.setLowShelf (48000.f, 150.f, dv.bass * 12.f);
@@ -1398,4 +1397,29 @@ void SeedEditor::drawEq (juce::Graphics& g, juce::Rectangle<float> r)
     g.setColour (ui::paper.withAlpha (0.45f));
     g.drawLine (r.getX(), r.getCentreY(), r.getRight(), r.getCentreY(), 1.f);
     strokeCurve (g, pts, ui::groupColour (gAdj), true, r.getCentreY(), 1.8f);
+}
+
+//==============================================================================
+static int gLastEditorW = 900;      // reopening the window in the same session keeps its size
+
+SeedEditor::SeedEditor (SeedProcessor& p) : juce::AudioProcessorEditor (&p), view (p)
+{
+    static_assert (kBaseW == kWidth && kBaseH == kHeight, "base size out of step with the view");
+    addAndMakeVisible (view);
+
+    const int startW = juce::jlimit (kBaseW / 2, kBaseW * 3, gLastEditorW);
+    setSize (startW, (int) std::lround ((double) startW * kBaseH / kBaseW));     // before the limits, which would otherwise squash a 0x0 window to the minimum
+
+    // drag any edge or the corner; the window keeps its shape and everything scales to fit
+    setResizable (true, true);
+    setResizeLimits (kBaseW / 2, kBaseH / 2, kBaseW * 3, kBaseH * 3);
+    getConstrainer()->setFixedAspectRatio ((double) kBaseW / (double) kBaseH);
+}
+
+void SeedEditor::resized()
+{
+    gLastEditorW = getWidth();
+    const float s = (float) getWidth() / (float) kBaseW;
+    view.setBounds (0, 0, kBaseW, kBaseH);
+    view.setTransform (juce::AffineTransform::scale (s));
 }
