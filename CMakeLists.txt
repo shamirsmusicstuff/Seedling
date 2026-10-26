@@ -55,6 +55,7 @@ target_sources(Seedling PRIVATE
     Source/Params.h
     Source/Skins.h
     Source/DuskPlate.h
+    Source/Palette.h
     Source/Randomizer.h
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
@@ -106,6 +107,13 @@ add_test(NAME seed_compat COMMAND seed_compat_test)
 add_executable(seed_reverb_test EXCLUDE_FROM_ALL Tests/reverb_test.cpp)
 target_include_directories(seed_reverb_test PRIVATE Source)
 add_test(NAME seed_reverb COMMAND seed_reverb_test)
+
+add_executable(seed_palette_test EXCLUDE_FROM_ALL Tests/palette_test.cpp)
+target_include_directories(seed_palette_test PRIVATE Source)
+if(NOT MSVC)
+    target_compile_options(seed_palette_test PRIVATE -ffp-contract=off)
+endif()
+add_test(NAME seed_palette COMMAND seed_palette_test)
 add_test(NAME engine COMMAND seed_engine_test)
 
 # Offscreen UI snapshot + processor test (renders the 3 pages to PNG):  cmake --build . --target seedling_snapshot

@@ -320,6 +320,51 @@ int main (int argc, char** argv)
             CHECK (d > 3000, "home and edit views look the same in skin %s", sk.name.toRawUTF8());
         }
         editor->showHomeForTest (true);
+        // seed colours: every seed grows its own palette (the "Seed colours" choice)
+        for (uint32_t sd : { 0u, 7u, 29u, 4242u })
+        {
+            editor->setSeedColoursForTest (sd);
+            editor->showHomeForTest (true);
+            auto home = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            save (home, dir.getChildFile ("home_seedcolours" + juce::String ((int) sd) + ".png"));
+            editor->showPageForTest (1);
+            auto edit = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            save (edit, dir.getChildFile ("edit_seedcolours" + juce::String ((int) sd) + ".png"));
+        }
+        {
+            auto diffPx = [] (const juce::Image& a, const juce::Image& b)
+            {
+                int d = 0;
+                for (int y = 0; y < a.getHeight(); y += 2)
+                    for (int x = 0; x < a.getWidth(); x += 2)
+                        if (a.getPixelAt (x, y) != b.getPixelAt (x, y)) ++d;
+                return d;
+            };
+            editor->showHomeForTest (true);
+            editor->setSeedColoursForTest (7);
+            auto a = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            editor->setSeedColoursForTest (4242);
+            auto b = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            CHECK (diffPx (a, b) > 5000, "different seeds should look different");
+
+            // following the seed: randomize, let the timer run (the glide takes ~10 ticks), same picture as that seed's palette
+            proc.randomize (31);
+            for (int i = 0; i < 14; ++i) editor->syncForTest();
+            auto followed = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            editor->setSeedColoursForTest (31);
+            auto direct = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            CHECK (diffPx (followed, direct) < 200, "seed mode did not follow the new seed (%d px differ)", diffPx (followed, direct));
+
+            // a fixed skin does NOT follow the seed
+            editor->setSkinForTest (skins::builtins()[1]);
+            auto fixed1 = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            proc.randomize (32);
+            for (int i = 0; i < 14; ++i) editor->syncForTest();
+            auto fixed2 = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            CHECK (diffPx (fixed1, fixed2) < 3000, "a chosen skin must not change with the seed");
+            proc.randomize (29);
+            editor->syncForTest();
+        }
         editor->setSkinForTest (skins::builtins().front());
         std::printf ("wrote README screenshots to %s\n", dir.getFullPathName().toRawUTF8());
     }

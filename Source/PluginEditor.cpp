@@ -942,7 +942,7 @@ void SeedView::setPage (int newPage)
 
 juce::Rectangle<int> SeedView::chipRect (int i) const
 {
-    return juce::Rectangle<int> (26, 26).withCentre ({ 760 + 28 * i, 26 });
+    return juce::Rectangle<int> (26, 26).withCentre ({ 700 + 28 * i, 26 });
 }
 
 void SeedView::resized()
@@ -1012,18 +1012,30 @@ void SeedView::timerCallback()
         dv = makeDerived (vals);
         for (auto& f : figures) if (f.page == page) f.comp->repaint();
     }
+    followSeed();
     tree.setSeed (proc.getSeed());
     homeTree.setSeed (proc.getSeed());
     if (proc.getSeed() != lastSeedShown || proc.getPresetName() != lastPresetShown) refreshLabels();
+}
+
+static const char* const kSeedSkinName = "Seed colours";
+
+static seed::Skin skinFromPalette (const juce::String& name, const seed::Palette& p)
+{
+    auto c = [] (seed::Rgb x) { return juce::Colour (x.r, x.g, x.b); };
+    seed::Skin k;
+    k.name = name; k.ink = c (p.ink); k.accent = c (p.accent); k.slate = c (p.slate); k.mist = c (p.mist); k.paper = c (p.paper);
+    return k;
 }
 
 void SeedView::loadSkins()
 {
     juce::StringArray problems;
     skinList = seed::skins::loadAll (&problems);
+    skinList.insert (skinList.begin(), skinFromPalette (kSeedSkinName, seed::palette::fromSeed (proc.getSeed())));   // first: colours that follow the patch seed
     skinName = seed::skins::loadCurrentName();
 
-    const seed::Skin* pick = &skinList.front();
+    const seed::Skin* pick = &skinList.front();       // new installs start on the seed colours
     for (auto& k : skinList) if (k.name == skinName) { pick = &k; break; }
     chooseSkin (pick->name);
     skinProblems = problems.joinIntoString ("; ");
@@ -1035,6 +1047,13 @@ void SeedView::chooseSkin (const juce::String& name)
         if (k.name == name)
         {
             skinName = name;
+            palGliding = false;
+            if (seedMode())
+            {
+                paletteSeed = proc.getSeed();
+                palShown = seed::palette::fromSeed (paletteSeed);
+                k = skinFromPalette (kSeedSkinName, palShown);
+            }
             ui::apply (k);
             lnf.applyPalette();
             seed::skins::saveCurrentName (name);
@@ -1043,6 +1062,47 @@ void SeedView::chooseSkin (const juce::String& name)
             repaint();
             return;
         }
+}
+
+bool SeedView::seedMode() const { return skinName == kSeedSkinName; }
+
+// In seed mode the palette follows the patch seed: a new seed glides to its colours over about half a second.
+void SeedView::followSeed()
+{
+    if (! seedMode() || skinList.empty()) return;
+    const uint32_t sd = proc.getSeed();
+    if (sd != paletteSeed)
+    {
+        paletteSeed = sd;
+        palFrom = palShown;
+        palTo = seed::palette::fromSeed (sd);
+        palT = 0.f;
+        palGliding = true;
+    }
+    if (palGliding)
+    {
+        palT = std::min (1.f, palT + 0.1f);
+        const float e = palT * palT * (3.f - 2.f * palT);
+        palShown = palT >= 1.f ? palTo : seed::palette::mix (palFrom, palTo, e);
+        if (palT >= 1.f) palGliding = false;
+        skinList.front() = skinFromPalette (kSeedSkinName, palShown);
+        ui::apply (skinList.front());
+        lnf.applyPalette();
+        sendLookAndFeelChange();
+        repaint();
+    }
+}
+
+void SeedView::setSeedColoursForTest (uint32_t sd)
+{
+    chooseSkin (kSeedSkinName);
+    paletteSeed = sd; palGliding = false; palShown = seed::palette::fromSeed (sd);
+    skinList.front() = skinFromPalette (kSeedSkinName, palShown);
+    ui::apply (skinList.front());
+    lnf.applyPalette();
+    sendLookAndFeelChange();
+    rebuildBackdrop();
+    repaint();
 }
 
 void SeedView::showSkinMenu()
@@ -1055,7 +1115,7 @@ void SeedView::showSkinMenu()
     m.addItem (2, "Reload skins");
 
     juce::Component::SafePointer<SeedView> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (chipRect (3))), [safe] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (chipRect (kMaxChips - 1))), [safe] (int r)
     {
         if (safe == nullptr || r == 0) return;
         if (r == 1) seed::skins::dir().revealToUser();
@@ -1066,15 +1126,15 @@ void SeedView::showSkinMenu()
 
 void SeedView::mouseUp (const juce::MouseEvent& e)
 {
-    const int n = (int) std::min<size_t> (4, skinList.size());
+    const int n = (int) std::min<size_t> (kMaxChips, skinList.size());
     for (int i = 0; i < n; ++i)
         if (chipRect (i).contains (e.getPosition()))
         {
-            if (i == 3 && skinList.size() > 4) showSkinMenu();
+            if (i == kMaxChips - 1 && skinList.size() > (size_t) kMaxChips) showSkinMenu();
             else chooseSkin (skinList[(size_t) i].name);
             return;
         }
-    if (e.mods.isPopupMenu() && chipRect (0).getUnion (chipRect (3)).contains (e.getPosition())) showSkinMenu();
+    if (e.mods.isPopupMenu() && chipRect (0).getUnion (chipRect (kMaxChips - 1)).contains (e.getPosition())) showSkinMenu();
 }
 
 // The whole window is one soft gradient: ink base, big blurred blobs of the seed's other colours that drift slowly
@@ -1184,7 +1244,7 @@ void SeedView::paint (juce::Graphics& g)
         capsText (g, "Seedling", { 26, 14, 300, 24 }, 14.f, 3, paper, juce::Justification::centredLeft, 0.32f);
 
     // skin chips
-    const int n = (int) std::min<size_t> (4, skinList.size());
+    const int n = (int) std::min<size_t> (kMaxChips, skinList.size());
     for (int i = 0; i < n; ++i)
     {
         const auto r = chipRect (i).toFloat();
@@ -1195,12 +1255,17 @@ void SeedView::paint (juce::Graphics& g)
         g.fillEllipse (c);
         g.setColour (paper.withAlpha (0.55f));
         g.drawEllipse (c, 1.f);
+        if (k.name == kSeedSkinName)
+        {
+            g.setColour (k.mist);
+            g.fillEllipse (c.reduced (c.getWidth() * 0.32f));
+        }
         if (k.name == skinName)
         {
             g.setColour (paper);
             g.drawEllipse (r.reduced (1.f), 1.2f);
         }
-        if (i == 3 && skinList.size() > 4)
+        if (i == kMaxChips - 1 && skinList.size() > (size_t) kMaxChips)
         {
             g.setColour (paper);
             g.setFont (font (12.f, 3));

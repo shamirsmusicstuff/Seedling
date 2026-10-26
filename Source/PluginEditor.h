@@ -6,6 +6,7 @@
 #include <vector>
 #include "PluginProcessor.h"
 #include "Skins.h"
+#include "Palette.h"
 
 //==============================================================================
 namespace ui
@@ -152,6 +153,7 @@ public:
     void showHomeForTest (bool h) { setHomeView (h); }
     bool isHomeView() const { return homeView; }
     void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinName = k.name; lnf.applyPalette(); sendLookAndFeelChange(); rebuildBackdrop(); repaint(); }
+    void setSeedColoursForTest (uint32_t seedValue);
     void syncForTest() { timerCallback(); driftT = 0.0; }
     void setDriftForTest (double beats) { driftT = beats; lastDriftClock = 0.0; }
     void mouseUp (const juce::MouseEvent&) override;
@@ -162,6 +164,9 @@ private:
     void setHomeView (bool home);
     void refreshLabels();
     void loadSkins();
+    void followSeed();
+    bool seedMode() const;
+    static constexpr int kMaxChips = 5;
     void chooseSkin (const juce::String& name);
     void showSkinMenu();
     void rebuildBackdrop();
@@ -219,6 +224,10 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
     std::vector<seed::Skin> skinList;
     juce::String skinName, skinProblems;
+    seed::Palette palShown = seed::palette::original(), palFrom = seed::palette::original(), palTo = seed::palette::original();
+    uint32_t paletteSeed = 0;
+    float palT = 1.f;
+    bool palGliding = false;
     juce::Label presetLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> chaosAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoTuneAttach;
