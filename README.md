@@ -3,6 +3,8 @@
 A random-patch synth, as VST3 (Windows, macOS) and Audio Unit (macOS), soft and light by default. Every knob from the three pictured pages:
 I. Envelope and LFO, II. Oscillators, III. Filter and effects. The pages are picked on a tree grown from a seed: roots = I, trunk and branches = II, canopy = III. Every parameter is a glowing bulb on the tree; each seed grows its own tree. Styled after 80s sci-fi: CRT screens, red neon, scanlines.
 
+> **This is the `duskverb-reverb` branch.** The reverb is rebuilt after the *Plate* engine of [DuskVerb](https://github.com/dusk-audio/dusk-audio-plugins) (Dusk Audio, GPL-3.0): a Dattorro plate with six input diffusers, two cross-coupled modulated tanks, a 12-stage density cascade, 3-band damping (bass / mid / treble decay) and a 7-tap stereo output (`Source/DuskPlate.h`). The six reverb knobs are the same, so every saved seed and preset keeps its settings; only the sound of the reverb changes. Because it follows GPL-3.0 code, **this branch is licensed GPL-3.0** (see `LICENSE`), unlike the earlier versions.
+
 ## Screenshots
 Seedling opens on the **home view**: the tree turning inside a ring of beat ticks over a full-window gradient built from the current skin. Tune, Save, Load, Randomize and Edit sound sit in one row of equal pills, with the seed box, soft/wild, auto-tune and preset arrows below; the four dots top right switch skin. **Edit sound** opens the three-page editor (tabs I / II / III, frosted cards, the tree as a sidebar); **Tree** brings you back. Both views in every built-in skin (Seedling, Skin 1, Skin 2, Skin 3, left to right, top to bottom):
 

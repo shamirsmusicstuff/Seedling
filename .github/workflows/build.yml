@@ -38,6 +38,10 @@ jobs:
         run: |
           cmake --build build --config Release --target seed_compat_test
           ctest --test-dir build -C Release -R seed_compat --output-on-failure
+      - name: Reverb test (decay time, damping, stability)
+        run: |
+          cmake --build build --config Release --target seed_reverb_test
+          ctest --test-dir build -C Release -R seed_reverb --output-on-failure
       - name: Build
         shell: bash
         run: |

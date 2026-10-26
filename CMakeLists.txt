@@ -54,6 +54,7 @@ target_sources(Seedling PRIVATE
     Source/Engine.h
     Source/Params.h
     Source/Skins.h
+    Source/DuskPlate.h
     Source/Randomizer.h
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
@@ -102,6 +103,9 @@ if(NOT MSVC)
 endif()
 enable_testing()
 add_test(NAME seed_compat COMMAND seed_compat_test)
+add_executable(seed_reverb_test EXCLUDE_FROM_ALL Tests/reverb_test.cpp)
+target_include_directories(seed_reverb_test PRIVATE Source)
+add_test(NAME seed_reverb COMMAND seed_reverb_test)
 add_test(NAME engine COMMAND seed_engine_test)
 
 # Offscreen UI snapshot + processor test (renders the 3 pages to PNG):  cmake --build . --target seedling_snapshot

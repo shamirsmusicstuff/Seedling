@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "DuskPlate.h"
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -281,120 +282,8 @@ namespace
         }
     };
 
-    //==========================================================================
-    // 8-line feedback delay network. rvb_atk = pre-delay plus a slow "swell" of the wet signal.
-    struct Reverb
-    {
-        static constexpr int N = 8;
-        std::vector<float> buf[N];
-        int mask[N] = {};
-        int wr = 0;
-        float delayCur[N] = {}, delayTgt[N] = {}, lp[N] = {}, gain[N] = {}, lfoPh[N] = {}, lfoInc[N] = {};
-        std::vector<float> pre; int preMask = 0, preWr = 0;
-        float env = 0.f, gate = 1.f;
-        float sr = 48000.f;
-        float dampC = 0.5f, modDepth = 0.f, preSamples = 0.f, riseCo = 1.f, mixCos = 1.f, mixSin = 0.f;
-
-        static constexpr int base[N] = { 1031, 1223, 1427, 1597, 1801, 2039, 2243, 2467 };
-
-        static int pow2 (int v) { int p = 1; while (p < v) p <<= 1; return p; }
-
-        void prepare (float sampleRate)
-        {
-            sr = sampleRate;
-            const float k = sr / 48000.f;
-            for (int i = 0; i < N; ++i)
-            {
-                const int sz = pow2 ((int) (base[i] * k * 2.0f) + 64);
-                buf[i].assign ((size_t) sz, 0.f);
-                mask[i] = sz - 1;
-                lfoInc[i] = (0.13f + 0.071f * (float) i) / sr;
-                lfoPh[i] = (float) i / (float) N;
-                delayCur[i] = delayTgt[i] = (float) base[i] * k;
-                lp[i] = 0.f;
-            }
-            const int psz = pow2 ((int) (0.08f * sr) + 8);
-            pre.assign ((size_t) psz, 0.f); preMask = psz - 1; preWr = 0;
-            wr = 0; env = 0.f; gate = 1.f;
-        }
-
-        void reset()
-        {
-            for (auto& b : buf) std::fill (b.begin(), b.end(), 0.f);
-            std::fill (pre.begin(), pre.end(), 0.f);
-            for (int i = 0; i < N; ++i) lp[i] = 0.f;
-            env = 0.f; gate = 1.f;
-        }
-
-        void setParams (const Derived& d)
-        {
-            const float k = sr / 48000.f;
-            const float sizeScale = 0.4f + 1.4f * d.rvbSize;
-            for (int i = 0; i < N; ++i)
-            {
-                delayTgt[i] = (float) base[i] * k * sizeScale;
-                gain[i] = std::pow (10.f, -3.f * delayTgt[i] / (d.rvbRt60 * sr));
-            }
-            dampC = 0.02f + 0.93f * d.rvbDamp;
-            modDepth = d.rvbChor * 14.f * k;
-            preSamples = d.rvbAtk * 0.06f * sr;
-            const float tau = d.rvbAtk * 0.5f * sr;
-            riseCo = tau < 1.f ? 1.f : 1.f - std::exp (-1.f / tau);
-            mixCos = std::cos (d.rvbMix * kPi * 0.5f);
-            mixSin = std::sin (d.rvbMix * kPi * 0.5f);
-        }
-
-        void process (float in, float& outL, float& outR)
-        {
-            // pre-delay
-            pre[(size_t) preWr] = in;
-            const int pd = (int) preSamples;
-            float x = pre[(size_t) ((preWr - pd) & preMask)];
-            preWr = (preWr + 1) & preMask;
-
-            // swell: the wet input fades in after silence
-            env = std::max (std::fabs (in), env * 0.9995f);
-            const float target = env > 0.002f ? 1.f : 0.f;
-            gate += (target - gate) * (target > gate ? riseCo : 0.002f);
-            x *= gate;
-
-            float d[N];
-            for (int i = 0; i < N; ++i)
-            {
-                delayCur[i] += (delayTgt[i] - delayCur[i]) * 0.001f;
-                lfoPh[i] += lfoInc[i]; if (lfoPh[i] >= 1.f) lfoPh[i] -= 1.f;
-                float dl = delayCur[i] + modDepth * std::sin (kTwoPi * lfoPh[i]);
-                dl = std::max (2.f, std::min (dl, (float) mask[i] - 2.f));
-                const float rp = (float) wr - dl;
-                const float fl = std::floor (rp);
-                const float fr = rp - fl;
-                const int i0 = (int) fl;
-                const float y = buf[i][(size_t) (i0 & mask[i])] * (1.f - fr)
-                              + buf[i][(size_t) ((i0 + 1) & mask[i])] * fr;
-                lp[i] = (1.f - dampC) * y + dampC * lp[i];
-                d[i] = lp[i] * gain[i];
-            }
-
-            outL = 0.45f * (d[0] + d[2] - d[4] + d[6] + 0.5f * (d[1] - d[3]));
-            outR = 0.45f * (d[1] + d[3] - d[5] + d[7] + 0.5f * (d[0] - d[2]));
-
-            // Hadamard feedback matrix (orthogonal => lossless before the per-line gains)
-            for (int h = 1; h < N; h <<= 1)
-                for (int i = 0; i < N; i += h << 1)
-                    for (int j = i; j < i + h; ++j)
-                    {
-                        const float a = d[j], b = d[j + h];
-                        d[j] = a + b; d[j + h] = a - b;
-                    }
-            static constexpr float sgn[N] = { 1, -1, 1, 1, -1, 1, -1, -1 };
-            for (int i = 0; i < N; ++i)
-            {
-                const float v = d[i] * 0.35355339f + x * sgn[i] * 0.35f;
-                buf[i][(size_t) (wr & mask[i])] = std::isfinite (v) ? v : 0.f;
-            }
-            ++wr;
-        }
-    };
+    // The reverb is DuskPlate (Source/DuskPlate.h): a Dattorro plate after DuskVerb's Plate engine.
+    using Reverb = dusk::Plate;
 }
 
 //==============================================================================
