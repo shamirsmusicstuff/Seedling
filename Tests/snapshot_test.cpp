@@ -135,7 +135,8 @@ int main (int argc, char** argv)
     // --- editor snapshots -----------------------------------------------------------------
     proc.randomize (29);
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
-    auto* editor = dynamic_cast<SeedEditor*> (ed.get());
+    auto* frame = dynamic_cast<SeedEditor*> (ed.get());
+    auto* editor = &frame->view;
     editor->setGrowthForTest (1.f);
     for (int page = 0; page < 3; ++page)
     {
@@ -284,7 +285,7 @@ int main (int argc, char** argv)
         using namespace seed;
         std::unique_ptr<juce::AudioProcessorEditor> fresh (proc.createEditor());
         auto* fe = dynamic_cast<SeedEditor*> (fresh.get());
-        CHECK (fe->isHomeView(), "the editor must open on the home view (spinning tree)");
+        CHECK (fe->view.isHomeView(), "the editor must open on the home view (spinning tree)");
         fresh.reset();
 
         proc.randomize (29);
@@ -343,6 +344,25 @@ int main (int argc, char** argv)
         std::printf ("drift: 5 beats move %d px, 30 beats move %d px (sampled)\n", diff (t0, t5), diff (t0, t30));
         editor->setDriftForTest (0.0);
         editor->setSkinForTest (seed::skins::builtins().front());
+    }
+
+    // --- the window resizes with a drag and everything scales to fit ------------------------------------------
+    {
+        CHECK (frame->isResizable(), "editor must be resizable");
+        const int w0 = frame->getWidth(), h0 = frame->getHeight();
+        CHECK (w0 == SeedEditor::kBaseW && h0 == SeedEditor::kBaseH, "default size %dx%d", w0, h0);
+        frame->setSize (1350, 1116);
+        const float sx = frame->view.getTransform().getScaleFactor();
+        CHECK (std::abs (sx - 1.5f) < 0.001f, "content scale %.3f at 1350 px wide", sx);
+        auto big = frame->createComponentSnapshot (frame->getLocalBounds(), true, 1.0f);
+        CHECK (big.getWidth() == 1350 && big.getHeight() == 1116, "big snapshot %dx%d", big.getWidth(), big.getHeight());
+        // a mouse position in the big window must land on the same control as the matching one in the small window
+        const auto p = frame->view.getLocalPoint (frame, juce::Point<int> (1350 - 10, 1116 - 10));
+        CHECK (std::abs (p.x - (SeedEditor::kBaseW - 7)) <= 1 && std::abs (p.y - (SeedEditor::kBaseH - 7)) <= 1, "mouse mapping off: %d,%d", p.x, p.y);
+        frame->setSize (450, 372);
+        CHECK (std::abs (frame->view.getTransform().getScaleFactor() - 0.5f) < 0.001f, "half-size scale wrong");
+        frame->setSize (w0, h0);
+        std::printf ("resize: 0.5x, 1x, 1.5x ok\n");
     }
 
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);

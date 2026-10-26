@@ -137,11 +137,11 @@ private:
 };
 
 //==============================================================================
-class SeedEditor : public juce::AudioProcessorEditor, private juce::Timer
+class SeedView : public juce::Component, private juce::Timer
 {
 public:
-    explicit SeedEditor (SeedProcessor&);
-    ~SeedEditor() override;
+    explicit SeedView (SeedProcessor&);
+    ~SeedView() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -228,5 +228,19 @@ private:
     juce::String lastPresetShown;
     uint32_t lastSeedShown = 0xffffffffu;
 
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeedView)
+};
+
+//==============================================================================
+// The plug-in window: a resizable frame around the fixed-size SeedView, which is simply scaled to fit (same shape, any size).
+class SeedEditor : public juce::AudioProcessorEditor
+{
+public:
+    explicit SeedEditor (SeedProcessor&);
+    void resized() override;
+    static constexpr int kBaseW = 900, kBaseH = 744;
+    SeedView view;
+
+private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeedEditor)
 };
