@@ -16,7 +16,8 @@ enum Flags : uint8_t
     fOffBias  = 4,  // randomizer often leaves this one at its default (off)
     fSemitone = 8,  // value is in semitones (tuning-sensitive)
     fSwitch   = 16, // on/off switch (shown as a button, host sees a bool)
-    fNoRandom = 32  // Randomize leaves this alone (it is a playing mode, not a sound)
+    fNoRandom = 32, // Randomize leaves this alone (it is a playing mode, not a sound)
+    fStep     = 64  // whole-number choice (the reverb type): the host sees a list, Randomize rounds
 };
 
 struct ParamDef
@@ -49,6 +50,8 @@ enum P : int
     adj_bass, adj_treb, adj_pan, adj_clip,
     // ---- Play mode (shown on page II; appended so existing seeds keep growing the same patches) -------
     glide, mono,
+    // ---- Reverb type (appended after mono: the first 48 parameters, and so every saved seed, are untouched) -----
+    rvb_type,
 
     kNumParams
 };
@@ -118,6 +121,15 @@ inline constexpr ParamDef kParams[kNumParams] =
 
     { "glide",     "Glide",             0.f,   1.f,  0.0f,  0.00f, 0.30f, gPlay, 1, fNoRandom },
     { "mono",      "Mono",              0.f,   1.f,  0.0f,  0.00f, 1.00f, gPlay, 1, fSwitch | fNoRandom },
+    { "rvb_type",  "Reverb Type",       0.f,  11.f,  0.0f,  0.00f,11.00f, gRvb,  2, fStep },
+};
+
+// The twelve reverbs, in the order of the type selector (the engine index in Source/DuskVerbs.h).
+inline constexpr int kNumReverbTypes = 12;
+inline constexpr const char* kReverbNames[kNumReverbTypes] =
+{
+    "Plate", "Vintage Plate", "Smooth Plate", "Chamber", "Tiled Room", "Hall",
+    "Dense Hall", "Parallel Hall", "Spring", "Shimmer", "Reverse", "Gated"
 };
 
 inline constexpr const char* kPageTitles[3] = { "Envelope and LFO", "Oscillators", "Filter and effects" };

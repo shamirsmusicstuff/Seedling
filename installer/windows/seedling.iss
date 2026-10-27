@@ -1,4 +1,4 @@
-; Inno Setup script. Build:  iscc /DSeedVer=0.3.1 /DSrc=<path to Seedling.vst3 folder> seedling.iss
+; Inno Setup script. Build:  iscc /DSeedVer=0.4.0 /DSrc=<path to Seedling.vst3 folder> seedling.iss
 #ifndef SeedVer
   #define SeedVer "0.0.0"
 #endif

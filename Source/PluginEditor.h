@@ -154,6 +154,8 @@ public:
     bool isHomeView() const { return homeView; }
     void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinName = k.name; lnf.applyPalette(); sendLookAndFeelChange(); rebuildBackdrop(); repaint(); }
     void setSeedColoursForTest (uint32_t seedValue);
+    void stepReverbTypeForTest (int dir) { stepReverbType (dir); }
+    juce::String reverbTypeNameForTest() const { return typeLabel.getText(); }
     void syncForTest() { timerCallback(); driftT = 0.0; }
     void setDriftForTest (double beats) { driftT = beats; lastDriftClock = 0.0; }
     void mouseUp (const juce::MouseEvent&) override;
@@ -163,6 +165,8 @@ private:
     void setPage (int newPage);
     void setHomeView (bool home);
     void refreshLabels();
+    void updateTypeLabel();
+    void stepReverbType (int dir);
     void loadSkins();
     void followSeed();
     bool seedMode() const;
@@ -221,6 +225,8 @@ private:
     juce::Slider chaosSlider;
     juce::ToggleButton autoTuneBtn { "auto-tune" };
     juce::ToggleButton monoBtn { "mono" };
+    juce::TextButton typePrev { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")) }, typeNext { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")) };
+    juce::Label typeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
     std::vector<seed::Skin> skinList;
     juce::String skinName, skinProblems;

@@ -125,6 +125,18 @@ namespace dusk
         static constexpr float kDecayDiff1 = 0.70f, kDecayDiff2 = 0.50f, kDensityCoeff = 0.55f;
         static constexpr float kLowXover = 450.f, kHighXover = 3800.f;
 
+        // Variants of the same tank: Plate, Vintage Plate (darker, steelier post filter) and Smooth Plate (denser, calmer).
+        struct Config
+        {
+            float density = 0.55f, diff1 = 0.70f, diff2 = 0.50f;   // in-loop allpass coefficients
+            float inDiffAdd = 0.f;                                 // added to the six input diffuser coefficients
+            float modScale = 1.f;                                  // scales the tank modulation
+            float outGain = 1.7f, erGain = 0.4f;
+            float lpHz = 0.f, hpHz = 0.f;                          // post filters (0 = off)
+        };
+        Config cfg;
+        float postLpL = 0.f, postLpR = 0.f, postHpL = 0.f, postHpR = 0.f, lpCoef = 0.f, hpCoef = 0.f;
+
         struct Tank
         {
             Allpass ap1, ap2, dens[kNumDensity];
@@ -140,11 +152,10 @@ namespace dusk
 
         Tank L, R;
         Allpass diff[kNumDiff];
-        Line pre, er;
+        Line er;
         float sr = 48000.f, k = 1.0884f;           // k = sr / 44100
-        float modDepth = 0.f, preSamples = 0.f, riseCo = 1.f, size = 0.5f, erGain = 0.4f;
+        float modDepth = 0.f, size = 0.5f;
         float loCoef = 0.f, hiCoef = 0.f;
-        float env = 0.f, gate = 1.f, mixCos = 1.f, mixSin = 0.f;
         bool flip = false, fresh = true;
 
         // early-reflection taps (ms), own set in DuskVerb's spirit: sparse, increasing, left/right interleaved
@@ -168,7 +179,6 @@ namespace dusk
                 R.dens[i].init (R.densLen[i] + 8);
             }
             for (int i = 0; i < kNumDiff; ++i) diff[i].init ((int) (kDiffBase[i] * k) + 8);
-            pre.init ((int) (0.08f * sr) + 16);
             er.init ((int) (0.09f * sr) + 16);
             L.mAp1.seed (11, 0.53f, sr); L.mD1.seed (23, 0.71f, sr); L.mD2.seed (37, 0.43f, sr);
             R.mAp1.seed (53, 0.61f, sr); R.mD1.seed (71, 0.37f, sr); R.mD2.seed (89, 0.83f, sr);
@@ -187,8 +197,8 @@ namespace dusk
                 t->lpLo = t->lpHi = t->cross = 0.f;
             }
             for (auto& a : diff) a.line.clear();
-            pre.clear(); er.clear();
-            env = 0.f; gate = 1.f;
+            er.clear();
+            postLpL = postLpR = postHpL = postHpR = 0.f;
         }
 
         void snapLengths()
@@ -225,11 +235,8 @@ namespace dusk
             }
 
             modDepth = d.rvbChor;                                       // 0 .. 1
-            preSamples = d.rvbAtk * 0.06f * sr;
-            const float tau = d.rvbAtk * 0.5f * sr;
-            riseCo = tau < 1.f ? 1.f : 1.f - std::exp (-1.f / tau);
-            mixCos = std::cos (d.rvbMix * kPi * 0.5f);
-            mixSin = std::sin (d.rvbMix * kPi * 0.5f);
+            lpCoef = cfg.lpHz > 0.f ? std::exp (-kTwoPi * cfg.lpHz / sr) : 0.f;
+            hpCoef = cfg.hpHz > 0.f ? std::exp (-kTwoPi * cfg.hpHz / sr) : 0.f;
         }
 
         float tapRead (const Tank& l, const Tank& r, int buf, float pos) const
@@ -247,7 +254,7 @@ namespace dusk
 
         void runTank (Tank& t, const Allpass* /*unused*/, float tankIn, bool isLeft)
         {
-            const float modK = modDepth * k;
+            const float modK = modDepth * k * cfg.modScale;
             t.ap1Len += (t.ap1Tgt - t.ap1Len) * 0.0005f;
             t.d1Len  += (t.d1Tgt  - t.d1Len)  * 0.0005f;
             t.ap2Len += (t.ap2Tgt - t.ap2Len) * 0.0005f;
@@ -255,7 +262,7 @@ namespace dusk
 
             // modulated allpass (decay diffusion 1)
             const float ap1Len = t.ap1Len + t.mAp1.next() * 14.f * modK;
-            float x = t.ap1.process (tankIn, kDecayDiff1, ap1Len);
+            float x = t.ap1.process (tankIn, cfg.diff1, ap1Len);
 
             // delay 1 (jittered read)
             const float del1 = t.d1.read (t.d1Len + t.mD1.next() * 8.f * modK);
@@ -264,7 +271,7 @@ namespace dusk
 
             // density cascade
             for (int i = 0; i < kNumDensity; ++i)
-                x = t.dens[i].process (x, kDensityCoeff, (float) t.densLen[i]);
+                x = t.dens[i].process (x, cfg.density, (float) t.densLen[i]);
 
             // 3-band damping: split into low / mid / high, apply the band gains
             t.lpLo = (1.f - loCoef) * x + loCoef * t.lpLo;
@@ -272,7 +279,7 @@ namespace dusk
             x = t.gLow * t.lpLo + t.gMid * (t.lpHi - t.lpLo) + t.gHi * (x - t.lpHi);
 
             // static allpass (decay diffusion 2), delay 2
-            x = t.ap2.process (x, kDecayDiff2, t.ap2Len);
+            x = t.ap2.process (x, cfg.diff2, t.ap2Len);
             const float del2 = t.d2.read (t.d2Len + t.mD2.next() * 6.f * modK);
             const float bias = flip ? 1e-18f : -1e-18f;
             t.d2.push (x + bias);
@@ -282,15 +289,8 @@ namespace dusk
 
         void process (float in, float& outL, float& outR)
         {
-            // pre-delay
-            pre.push (in);
-            float x = pre.at (std::max (1, (int) preSamples + 1));
-
-            // swell: the wet input fades in after silence (rvb_atk)
-            env = std::max (std::fabs (in), env * 0.9995f);
-            const float target = env > 0.002f ? 1.f : 0.f;
-            gate += (target - gate) * (target > gate ? riseCo : 0.002f);
-            x *= gate;
+            // (pre-delay and the slow swell are done by the caller)
+            const float x = in;
 
             // early reflections
             er.push (x);
@@ -303,7 +303,7 @@ namespace dusk
 
             // input diffusion
             float s = x;
-            for (int i = 0; i < kNumDiff; ++i) s = diff[i].process (s, kDiffCoeff[i], (float) std::max (2, (int) (kDiffBase[i] * k)));
+            for (int i = 0; i < kNumDiff; ++i) s = diff[i].process (s, std::min (0.8f, kDiffCoeff[i] + cfg.inDiffAdd), (float) std::max (2, (int) (kDiffBase[i] * k)));
 
             // the two cross-coupled tanks (figure-8): each is fed the input plus the other's last output
             const float crossL = L.cross, crossR = R.cross;
@@ -317,12 +317,13 @@ namespace dusk
                 wl += kTapsL[i].sign * tapRead (L, R, kTapsL[i].buf, kTapsL[i].pos);
                 wr += kTapsR[i].sign * tapRead (L, R, kTapsR[i].buf, kTapsR[i].pos);
             }
-            outL = wl * kOutScale * kOutGain + eL * erGain * 0.25f;
-            outR = wr * kOutScale * kOutGain + eR * erGain * 0.25f;
+            outL = wl * kOutScale * cfg.outGain + eL * cfg.erGain * 0.25f;
+            outR = wr * kOutScale * cfg.outGain + eR * cfg.erGain * 0.25f;
+            if (lpCoef > 0.f) { postLpL = (1.f - lpCoef) * outL + lpCoef * postLpL; postLpR = (1.f - lpCoef) * outR + lpCoef * postLpR; outL = postLpL; outR = postLpR; }
+            if (hpCoef > 0.f) { postHpL = (1.f - hpCoef) * outL + hpCoef * postHpL; postHpR = (1.f - hpCoef) * outR + hpCoef * postHpR; outL -= postHpL; outR -= postHpR; }
             if (! std::isfinite (outL) || ! std::isfinite (outR)) { reset(); outL = outR = 0.f; }
         }
 
-        static constexpr float kOutGain = 1.7f;        // wet level, matched to the previous reverb (see Tests/reverb_test.cpp)
     };
 }
 }

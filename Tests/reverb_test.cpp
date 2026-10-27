@@ -1,6 +1,7 @@
 // DuskPlate (the reverb): stable, the right decay time, damping darkens the tail, deterministic, size and modulation behave.
 // Plain C++, no JUCE.
-#include "DuskPlate.h"
+#include "DuskVerbs.h"
+#include "Randomizer.h"
 #include <cstdio>
 #include <random>
 #include <vector>
@@ -125,6 +126,122 @@ int main()
         std::printf ("stress: peak %.2f\n", peak);
         CHECK (finite, "NaN or inf");
         CHECK (peak < 40.f, "peak %.1f", peak);
+    }
+
+    // 7. all twelve reverbs: finite, deterministic, similar loudness, sane decay, safe to switch between while playing
+    {
+        std::mt19937 g (11);
+        std::normal_distribution<float> n (0.f, 0.1f);
+        auto render = [&] (int type, float rt, int seconds, std::vector<float>* ir)
+        {
+            Derived d = make (rt, 0.5f, 0.3f, 0.5f); d.rvbType = (float) type;
+            dusk::Reverb r; r.prepare (sr); r.setParams (d);
+            double e = 0; int cnt = 0; bool finite = true; float peak = 0.f;
+            for (int i = 0; i < (int) (sr * (float) seconds); ++i)
+            {
+                float in = ir ? (i == 0 ? 1.f : 0.f) : n (g), l, rr;
+                r.process (in, l, rr);
+                if (! std::isfinite (l) || ! std::isfinite (rr)) finite = false;
+                peak = std::max (peak, std::max (std::fabs (l), std::fabs (rr)));
+                if (ir) ir->push_back (l + rr);
+                else if (i > (int) (sr * 3.f)) { e += (double) l * l + (double) rr * rr; ++cnt; }
+            }
+            CHECK (finite, "%s: NaN or inf", kReverbNames[type]);
+            return cnt ? std::sqrt (e / cnt / 2.0) : (double) peak;
+        };
+
+        double ref = 0;
+        for (int t = 0; t < kNumReverbTypes; ++t)
+        {
+            const double rms = render (t, 2.f, 8, nullptr);
+            if (t == 0) ref = rms;
+            const double db = 20.0 * std::log10 (rms / ref);
+            std::printf ("  %-14s wet level %+5.1f dB vs Plate\n", kReverbNames[t], db);
+            CHECK (rms > 0.002, "%s is silent", kReverbNames[t]);
+            CHECK (std::fabs (db) < 5.0, "%s level %.1f dB away from the Plate", kReverbNames[t], db);
+
+            std::vector<float> a, b;
+            render (t, 2.f, 1, &a); render (t, 2.f, 1, &b);
+            CHECK (a == b, "%s is not deterministic", kReverbNames[t]);
+        }
+
+        // decay time: networks and plates follow the length knob (damping low); the gate ends at its gate length
+        for (int t : { 0, 5, 6 })
+        {
+            std::vector<float> h; render (t, 2.5f, 9, &h);
+            const float got = rt60 (h, sr);
+            std::printf ("  %-14s T60 target 2.5 s -> %.2f s\n", kReverbNames[t], got);
+            CHECK (got > 1.2f && got < 4.5f, "%s T60 %.2f s", kReverbNames[t], got);
+        }
+        {
+            std::vector<float> h; render (11, 1.5f, 3, &h);
+            double early = 0, late = 0;
+            for (size_t i = 0; i < h.size(); ++i) (i < (size_t) (0.25f * sr) ? early : (i > (size_t) (2.f * sr) ? late : early)) += (double) h[i] * h[i];
+            CHECK (late < early * 1e-6, "the gate did not close");
+        }
+        {
+            std::vector<float> hs, hl; render (8, 0.5f, 3, &hs); render (8, 6.f, 3, &hl);
+            auto tailE = [&] (const std::vector<float>& h) { double e = 0; for (size_t i = (size_t) (1.5f * sr); i < h.size(); ++i) e += (double) h[i] * h[i]; return e; };
+            CHECK (tailE (hl) > tailE (hs) * 3.0, "spring: longer length should ring longer");
+        }
+
+        // switching type every ~0.4 s while noise plays: never NaN, never a huge click
+        {
+            dusk::Reverb r; r.prepare (sr);
+            float peak = 0.f; bool finite = true;
+            for (int blk = 0; blk < 200; ++blk)
+            {
+                Derived d = make (1.5f, 0.4f, 0.4f, 0.5f); d.rvbType = (float) ((blk / 4) % kNumReverbTypes);
+                r.setParams (d);
+                for (int i = 0; i < 4800; ++i)
+                {
+                    float l, rr; r.process (n (g), l, rr);
+                    if (! std::isfinite (l) || ! std::isfinite (rr)) finite = false;
+                    peak = std::max (peak, std::max (std::fabs (l), std::fabs (rr)));
+                }
+            }
+            std::printf ("  type switching: peak %.2f\n", peak);
+            CHECK (finite && peak < 4.f, "switching types broke the reverb (peak %.2f)", peak);
+        }
+
+        // random knobs on every type
+        {
+            std::uniform_real_distribution<float> u (0.f, 1.f);
+            for (int t = 0; t < kNumReverbTypes; ++t)
+            {
+                dusk::Reverb r; r.prepare (44100.f);
+                float peak = 0.f; bool finite = true;
+                for (int blk = 0; blk < 600; ++blk)
+                {
+                    Derived d = make (map::rvbRt60 (u (g)), u (g), u (g), u (g), u (g) * 0.3f); d.rvbType = (float) t;
+                    r.setParams (d);
+                    for (int i = 0; i < 1024; ++i)
+                    {
+                        float l, rr; r.process (n (g) * 5.f, l, rr);
+                        if (! std::isfinite (l) || ! std::isfinite (rr)) finite = false;
+                        peak = std::max (peak, std::max (std::fabs (l), std::fabs (rr)));
+                    }
+                }
+                CHECK (finite && peak < 40.f, "%s: unstable with moving knobs (peak %.1f)", kReverbNames[t], peak);
+            }
+        }
+    }
+
+    // 8. the reverb type is part of Randomize: whole numbers, and every seed range reaches several types; old seeds keep their old values
+    {
+        int seen[kNumReverbTypes] = {}, kinds = 0;
+        for (uint32_t sd = 1; sd <= 600; ++sd)
+        {
+            float v[kNumParams];
+            randomizeValues (sd, 0.2f, v);
+            CHECK (v[rvb_type] == std::round (v[rvb_type]) && v[rvb_type] >= 0.f && v[rvb_type] <= 11.f, "rvb_type %.2f is not a type", v[rvb_type]);
+            ++seen[(int) v[rvb_type]];
+        }
+        for (int c : seen) if (c > 0) ++kinds;
+        std::printf ("reverb types reached by 600 soft seeds: %d of 12\n", kinds);
+        CHECK (kinds >= 10, "Randomize only reaches %d reverb types", kinds);
+        CHECK (seen[5] + seen[6] > seen[11] + seen[10], "soft randomization should favour halls over gated/reverse");
+        CHECK (kParams[rvb_type].def == 0.f && rvb_type == kNumParams - 1, "rvb_type must stay the last parameter (appended)");
     }
 
     std::printf (failures == 0 ? "REVERB OK\n" : "%d REVERB CHECK(S) FAILED\n", failures);

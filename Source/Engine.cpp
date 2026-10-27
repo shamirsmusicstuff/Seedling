@@ -1,5 +1,5 @@
 #include "Engine.h"
-#include "DuskPlate.h"
+#include "DuskVerbs.h"
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -57,6 +57,7 @@ Derived makeDerived (const float* p)
     d.rvbDamp = p[rvb_damp];
     d.rvbChor = p[rvb_chor];
     d.rvbSize = p[rvb_size];
+    d.rvbType = p[rvb_type];
 
     d.glideSec = p[glide] < 0.01f ? 0.f : 0.004f * std::pow (750.f, p[glide]);   // 4 ms .. 3 s
     d.mono = p[mono];
@@ -282,8 +283,8 @@ namespace
         }
     };
 
-    // The reverb is DuskPlate (Source/DuskPlate.h): a Dattorro plate after DuskVerb's Plate engine.
-    using Reverb = dusk::Plate;
+    // The reverb is Source/DuskVerbs.h: twelve reverbs after DuskVerb's engines, chosen by rvb_type.
+    using Reverb = dusk::Reverb;
 }
 
 //==============================================================================
@@ -408,7 +409,7 @@ struct Engine::Impl
         const float co = 1.f - std::exp (-(float) chunk / (sr * 0.015f));
         for (int i = 0; i < kNumParams; ++i)
         {
-            if (snap) { cur[i] = tgt[i]; continue; }
+            if (snap || (kParams[i].flags & fStep)) { cur[i] = tgt[i]; continue; }     // choices switch at once, they do not glide
             const float diff = tgt[i] - cur[i];
             const float range = kParams[i].hi - kParams[i].lo;
             cur[i] = std::fabs (diff) < 1e-4f * range ? tgt[i] : cur[i] + diff * co;

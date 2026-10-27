@@ -410,6 +410,55 @@ int main (int argc, char** argv)
         std::printf ("resize: 0.5x, 1x, 1.5x ok\n");
     }
 
+    // --- the reverb type selector ---------------------------------------------------------------------------
+    {
+        editor->showPageForTest (2);
+        editor->setGrowthForTest (1.f);
+        const auto dir = outDir.getChildFile ("readme");
+        dir.createDirectory();
+        juce::Image first;
+        for (int t = 0; t < seed::kNumReverbTypes; ++t)
+        {
+            proc.setReal (seed::rvb_type, (float) t);
+            editor->syncForTest();
+            CHECK (editor->reverbTypeNameForTest() == seed::kReverbNames[t], "selector shows '%s' for type %d", editor->reverbTypeNameForTest().toRawUTF8(), t);
+            auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+            const auto f = dir.getChildFile ("reverb_" + juce::String (t) + ".png");
+            f.deleteFile();
+            juce::FileOutputStream fo (f);
+            juce::PNGImageFormat().writeImageToStream (img, fo);
+            if (t == 0) first = img;
+            if (t == 11)
+            {
+                int d = 0;
+                for (int y = 330; y < 530; y += 2) for (int x = 380; x < 860; x += 2) if (first.getPixelAt (x, y) != img.getPixelAt (x, y)) ++d;
+                CHECK (d > 1500, "the reverb figure should look different for the gated type (%d px)", d);
+            }
+        }
+        proc.setReal (seed::rvb_type, 11.f);
+        editor->syncForTest();
+        editor->stepReverbTypeForTest (+1);
+        CHECK (editor->reverbTypeNameForTest() == "Plate" && (int) proc.getReal (seed::rvb_type) == 0, "next from the last type should wrap to Plate");
+        editor->stepReverbTypeForTest (-1);
+        CHECK (editor->reverbTypeNameForTest() == "Gated", "previous from Plate should wrap to Gated");
+        proc.setReal (seed::rvb_type, 0.f);
+        editor->syncForTest();
+        editor->showHomeForTest (true);
+
+        // the type survives a preset round trip, and a preset from before the reverb types loads as Plate
+        proc.setReal (seed::rvb_type, 9.f);
+        const auto pf = outDir.getChildFile ("type_roundtrip.seedling");
+        proc.savePreset (pf);
+        proc.setReal (seed::rvb_type, 2.f);
+        proc.loadPreset (pf);
+        CHECK ((int) proc.getReal (seed::rvb_type) == 9, "reverb type lost in the preset round trip (%d)", (int) proc.getReal (seed::rvb_type));
+        auto xml = pf.loadFileAsString().replace ("id=\"rvb_type\"", "id=\"unused_type\"");
+        pf.replaceWithText (xml);
+        proc.loadPreset (pf);
+        CHECK ((int) proc.getReal (seed::rvb_type) == 0, "an older preset (no reverb type) should load as Plate, got %d", (int) proc.getReal (seed::rvb_type));
+        std::printf ("reverb type selector: ok\n");
+    }
+
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);
     ed.reset();
     return failures == 0 ? 0 : 1;
