@@ -42,7 +42,7 @@ jobs:
         run: |
           cmake --build build --config Release --target seed_palette_test
           ctest --test-dir build -C Release -R seed_palette --output-on-failure
-      - name: Reverb test (all twelve reverbs: level, decay time, stability)
+      - name: "Reverb test (all twelve reverbs: level, decay time, stability)"
         run: |
           cmake --build build --config Release --target seed_reverb_test
           ctest --test-dir build -C Release -R seed_reverb --output-on-failure
