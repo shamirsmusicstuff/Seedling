@@ -39,7 +39,7 @@ struct Derived
     float fmMod, fmAmt, mixMod, mix;
     float bForm, bNoise, bMod, sub, bSemi, bHoldHz;       // bHoldHz 0 = sample&hold off
     float fltType, fltK, fltHz, fltKf, fltMod, fltSep;     // fltK = 1/Q
-    float sat, rvbMix, rvbAtk, rvbRt60, rvbDamp, rvbChor, rvbSize;
+    float sat, rvbMix, rvbAtk, rvbRt60, rvbDamp, rvbChor, rvbSize, rvbType;
     float bass, treb, pan, clip;
     float glideSec, mono;                                 // glideSec 0 = off; mono >= 0.5 = monophonic
 };

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Seedling VERSION 0.3.1 LANGUAGES C CXX)
+project(Seedling VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,6 +54,8 @@ target_sources(Seedling PRIVATE
     Source/Engine.h
     Source/Params.h
     Source/Palette.h
+    Source/DuskPlate.h
+    Source/DuskVerbs.h
     Source/Randomizer.h
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
@@ -109,6 +111,9 @@ if(NOT MSVC)
     target_compile_options(seed_palette_test PRIVATE -ffp-contract=off)
 endif()
 add_test(NAME seed_palette COMMAND seed_palette_test)
+add_executable(seed_reverb_test EXCLUDE_FROM_ALL Tests/reverb_test.cpp)
+target_include_directories(seed_reverb_test PRIVATE Source)
+add_test(NAME seed_reverb COMMAND seed_reverb_test)
 add_test(NAME engine COMMAND seed_engine_test)
 
 # Offscreen UI snapshot + processor test (renders the 3 pages to PNG):  cmake --build . --target seedling_snapshot

@@ -17,6 +17,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SeedProcessor::createLayout(
             continue;
         }
 
+        if (d.flags & fStep)
+        {
+            juce::StringArray names;
+            for (auto* n : kReverbNames) names.add (n);
+            layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { d.id, 1 }, d.name, names, (int) d.def));
+            continue;
+        }
+
         const bool semi = (d.flags & fSemitone) != 0;
         auto attrs = juce::AudioParameterFloatAttributes().withStringFromValueFunction (
             [semi] (float v, int) { return juce::String (v, 2) + (semi ? " st" : ""); });

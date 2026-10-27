@@ -152,6 +152,8 @@ public:
     void showHomeForTest (bool h) { setHomeView (h); }
     bool isHomeView() const { return homeView; }
     void setSeedPaletteForTest (uint32_t sd) { paletteSeed = sd; palGliding = false; showPalette (seed::palette::fromSeed (sd)); }
+    void stepReverbTypeForTest (int dir) { stepReverbType (dir); }
+    juce::String reverbTypeNameForTest() const { return typeLabel.getText(); }
     void syncForTest() { timerCallback(); driftT = 0.0; }
     void setDriftForTest (double beats) { driftT = beats; lastDriftClock = 0.0; }
 
@@ -161,6 +163,8 @@ private:
     void setHomeView (bool home);
     void refreshLabels();
     void showPalette (const seed::Palette&);
+    void updateTypeLabel();
+    void stepReverbType (int dir);
     void followSeed();
     void rebuildBackdrop();
     void paintBackdrop (juce::Graphics&);
@@ -214,6 +218,8 @@ private:
     juce::Slider chaosSlider;
     juce::ToggleButton autoTuneBtn { "auto-tune" };
     juce::ToggleButton monoBtn { "mono" };
+    juce::TextButton typePrev { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")) }, typeNext { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")) };
+    juce::Label typeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
     seed::Palette palShown = seed::palette::original(), palFrom = seed::palette::original(), palTo = seed::palette::original();
     uint32_t paletteSeed = 0;

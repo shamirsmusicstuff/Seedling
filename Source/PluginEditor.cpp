@@ -31,7 +31,7 @@ namespace
         { 14, 276 }, { 90, 276 }, { 14, 342 }, { 90, 342 }, { 14, 408 }, { 90, 408 },  // rvb_*
         { 14, 484 }, { 90, 484 }, { 520, 484 }, { 596, 484 },                          // adj_bass adj_treb adj_pan adj_clip
     // Play mode (page II)
-    { 300, 204 }, { 0, 0 }                                                         // glide (mono is a switch, placed in resized())
+    { 300, 204 }, { 0, 0 }, { 0, 0 }                                               // glide (mono is a switch, rvb_type has its own selector: both placed in resized())
     };
 
     float hashRnd (int k)
@@ -805,7 +805,7 @@ SeedView::SeedView (SeedProcessor& p) : proc (p)
 
     for (int i = 0; i < kNumParams; ++i)
     {
-        if (! (kParams[i].flags & fSwitch))              // switches (mono) are buttons, not knobs
+        if (! (kParams[i].flags & (fSwitch | fStep)))     // switches (mono) and the reverb type are buttons, not knobs
         {
             auto k = std::make_unique<Knob> (proc.apvts, i);
             k->onInteract = [this] (int idx, float level) { tree.setInteraction (idx, level); };
@@ -819,6 +819,17 @@ SeedView::SeedView (SeedProcessor& p) : proc (p)
     monoAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, kParams[mono].id, monoBtn);
     monoBtn.onStateChange = [this] { tree.setInteraction (mono, monoBtn.isDown() ? 1.f : (monoBtn.isOver() ? 0.5f : 0.f)); };
     addChildComponent (monoBtn);
+
+    // reverb type: < name >  (twelve reverbs, recreated after DuskVerb's engines)
+    typePrev.setTooltip ("Previous reverb type");
+    typeNext.setTooltip ("Next reverb type: Plate, Vintage Plate, Smooth Plate, Chamber, Tiled Room, Hall, Dense Hall, Parallel Hall, Spring, Shimmer, Reverse, Gated");
+    typePrev.onClick = [this] { stepReverbType (-1); };
+    typeNext.onClick = [this] { stepReverbType (+1); };
+    typeLabel.setJustificationType (juce::Justification::centred);
+    typeLabel.setFont (ui::font (14.f, 2));
+    typeLabel.setInterceptsMouseClicks (false, false);
+    for (auto* c : std::initializer_list<juce::Component*> { &typePrev, &typeNext, &typeLabel }) addChildComponent (c);
+    updateTypeLabel();
     dv = makeDerived (vals);
 
     // ---- figures -----------------------------------------------------------------
@@ -929,6 +940,7 @@ void SeedView::setHomeView (bool h)
     for (auto& k : knobs) k->setVisible (! h && kParams[k->paramIndex].page == page);
     for (auto& f : figures) f.comp->setVisible (! h && f.page == page);
     monoBtn.setVisible (! h && page == 1);
+    for (auto* c : std::initializer_list<juce::Component*> { &typePrev, &typeNext, &typeLabel }) c->setVisible (! h && page == 2);
     rebuildBackdrop();
     repaint();
 }
@@ -942,6 +954,7 @@ void SeedView::setPage (int newPage)
     for (auto& k : knobs) k->setVisible (! homeView && kParams[k->paramIndex].page == page);
     for (auto& f : figures) f.comp->setVisible (! homeView && f.page == page);
     monoBtn.setVisible (! homeView && page == 1);
+    for (auto* c : std::initializer_list<juce::Component*> { &typePrev, &typeNext, &typeLabel }) c->setVisible (! homeView && page == 2);
     repaint();
 }
 
@@ -980,6 +993,22 @@ void SeedView::resized()
 
     for (int i = 0; i < 3; ++i) tabBtn[i].setBounds (kContentX + i * 156, 10, 148, 32);
     monoBtn.setBounds (kContentX + 388, kContentY + 222, 84, 24);
+    typePrev.setBounds (kContentX + 360, kContentY + 228, 28, 28);
+    typeLabel.setBounds (kContentX + 392, kContentY + 228, 196, 28);
+    typeNext.setBounds (kContentX + 592, kContentY + 228, 28, 28);
+}
+
+void SeedView::updateTypeLabel()
+{
+    const int t = juce::jlimit (0, kNumReverbTypes - 1, (int) std::lround (proc.getReal (rvb_type)));
+    if (typeLabel.getText() != kReverbNames[t]) typeLabel.setText (kReverbNames[t], juce::dontSendNotification);
+}
+
+void SeedView::stepReverbType (int dir)
+{
+    const int t = (int) std::lround (proc.getReal (rvb_type));
+    proc.setReal (rvb_type, (float) (((t + dir) % kNumReverbTypes + kNumReverbTypes) % kNumReverbTypes));
+    updateTypeLabel();
 }
 
 void SeedView::refreshLabels()
@@ -1017,6 +1046,7 @@ void SeedView::timerCallback()
         dv = makeDerived (vals);
         for (auto& f : figures) if (f.page == page) f.comp->repaint();
     }
+    updateTypeLabel();
     followSeed();
     tree.setSeed (proc.getSeed());
     homeTree.setSeed (proc.getSeed());
@@ -1172,6 +1202,9 @@ void SeedView::paint (juce::Graphics& g)
             g.drawEllipse (r, 1.f);
         }
     }
+
+    if (! homeView && page == 2)
+        capsText (g, "Reverb type", { kContentX + 360, kContentY + 208, 260, 16 }, 9.f, 2, paper.withAlpha (0.75f), juce::Justification::centred);
 
     // signal-flow arrows on the oscillator page
     if (! homeView && page == 1)
@@ -1360,7 +1393,9 @@ void SeedView::drawSaturate (juce::Graphics& g, juce::Rectangle<float> r)
 void SeedView::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
 {
     const auto& d = dv;
-    const float T = d.rvbRt60 * 0.55f;
+    const int type = juce::jlimit (0, kNumReverbTypes - 1, (int) std::lround (d.rvbType));
+    const float gateS = juce::jlimit (0.08f, 1.25f, 0.08f + 0.12f * d.rvbRt60 * (0.6f + 0.8f * d.rvbSize));
+    const float T = type == 11 ? gateS * 1.35f : (type == 10 ? std::min (d.rvbRt60, 5.f) * 0.55f : d.rvbRt60 * 0.55f);
     const float pre = d.rvbAtk * 0.06f, swell = d.rvbAtk * 0.5f + 1e-3f;
     const int bars = std::max (30, (int) (r.getWidth() / 3.5f));
 
@@ -1370,6 +1405,9 @@ void SeedView::drawReverb (juce::Graphics& g, juce::Rectangle<float> r)
     {
         const float t = T * (float) k / (float) bars;
         float a = t < pre ? 0.f : std::pow (10.f, -3.f * t / d.rvbRt60);
+        if (type == 11) a = t < pre ? 0.f : (t < gateS ? 1.f : 0.f);                                   // gated: flat, then a hard cut
+        else if (type == 10) { const float pk = 0.07f * (0.7f + 0.6f * d.rvbSize); a = t < pk ? t / pk : std::pow (10.f, -3.f * (t - pk) / std::min (d.rvbRt60, 5.f)); }   // reverse: it swells, then decays
+        else if (type == 4) a = std::pow (10.f, -3.f * t / std::min (d.rvbRt60 * 0.3f, 1.3f));       // tiled room: short and dark
         if (t >= pre && d.rvbAtk > 0.01f) a *= 1.f - std::exp (-(t - pre) / swell * 3.f);
         const float amp = a * (0.55f + 0.45f * hashRnd (k + 1));
         const float x = r.getX() + r.getWidth() * (float) k / (float) bars;

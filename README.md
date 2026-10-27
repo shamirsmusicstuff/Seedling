@@ -4,6 +4,8 @@ A random-patch synth, as VST3 (Windows, macOS) and Audio Unit (macOS), soft and 
 I. Envelope and LFO, II. Oscillators, III. Filter and effects. The pages are picked on a tree grown from a seed: roots = I, trunk and branches = II, canopy = III. Every parameter is a glowing bulb on the tree; each seed grows its own tree. Styled after 80s sci-fi: CRT screens, red neon, scanlines.
 
 ## Screenshots
+> **Licence note.** The reverbs are recreated after the engines of [DuskVerb](https://github.com/dusk-audio/dusk-audio-plugins) (Dusk Audio, GPL-3.0), so Seedling is now licensed **GPL-3.0** (see `LICENSE`). Earlier versions were not.
+
 > **This is the `seed-colors` branch.** There are no skins and no custom colours here: every seed grows its own colours. Seed 0 (no seed yet) is the original Seedling palette; the same seed always gives the same palette, on every machine. The `main` branch keeps the skins.
 
 Seedling opens on the **home view**: the tree turning inside a ring of beat ticks over a full-window gradient. Tune, Save, Load, Randomize and Edit sound sit in one row of equal pills, with the seed box, soft/wild, auto-tune and preset arrows below; the five dots top right show the current seed's colours. **Edit sound** opens the three-page editor (tabs I / II / III, frosted cards, the tree as a sidebar); **Tree** brings you back. Seeds 0, 7, 29 and 4242 (left to right, top to bottom):
@@ -13,6 +15,22 @@ Seedling opens on the **home view**: the tree turning inside a ring of beat tick
 ![Sound editor, four seeds](docs/seeds-editor.png)
 
 (`seedling_snapshot` regenerates the individual PNGs; see Tests.)
+
+* **Reverb types** - twelve reverbs, picked with the < > selector on page III (next to the saturate card) and saved with the patch and the seed. All use the same six knobs (mix, attack, length, damping, chorus, size); each is a compact recreation of a DuskVerb engine, not a bit-exact port. Soft Randomize favours the halls and plates; Gated and Reverse are rare. Presets and seeds from before the types existed load as Plate.
+
+  | Plate | Vintage Plate | Smooth Plate | Chamber |
+  |---|---|---|---|
+  | Dattorro cross-coupled plate: input diffusers, modulated tanks, 12-stage density cascade, 3-band damping, 7-tap stereo output | the same tank, darker and steelier | the same tank, denser and calmer | four cross-coupled lines, no modulation, 48 output taps |
+
+  | Tiled Room | Hall | Dense Hall | Parallel Hall |
+  |---|---|---|---|
+  | sparse early reflections + a short dark tail | 16-line feedback network, bass/mid/treble decay | 8 lines with an allpass in each, modulation everywhere | six bands, each with its own network and decay time |
+
+  | Spring | Shimmer | Reverse | Gated |
+  |---|---|---|---|
+  | three dispersive spring lines with a little drive | 8 lines with an octave-up shifter in the feedback | rising early reflections into a dark tail | 64-tap tapped delay with a hard gate (length sets the gate time) |
+
+  ![The reverb card for all twelve types](docs/reverb-types.png)
 
 * **Randomize** - new seed each press; the seed box recalls any patch exactly. The soft <-> wild slider sets how far it may stray (default: soft).
 * **Correct Tune** - snaps oscillator A to octaves and B to perfect intervals so the keys play in tune. "auto-tune" runs it after every Randomize.
