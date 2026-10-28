@@ -219,6 +219,82 @@ int main()
         (void) rr;
     }
 
+    // ---- the six sound sources: finite, audible, bounded, in tune, and not too heavy ---------------------------------
+    {
+        std::printf ("\nsound sources:\n");
+        auto acf = [] (const std::vector<float>& x, int from, int len, float expectHz) -> float     // cents error of the autocorrelation peak
+        {
+            const double period = (double) kSr / expectHz;
+            const int mult = std::max (1, (int) std::ceil (400.0 / period));              // measure over several periods: finer than one sample
+            const double p0 = period * mult;
+            const int lo = (int) (p0 * 0.985), hi = (int) (p0 * 1.015) + 1;
+            std::vector<double> c ((size_t) hi + 2, 0.0);
+            double e0 = 0; for (int i = 0; i < len; ++i) e0 += (double) x[(size_t) from + i] * x[(size_t) from + i];
+            for (int lag = lo; lag <= hi; ++lag)
+            {
+                double s = 0, e1 = 0;
+                for (int i = 0; i < len; ++i) { s += (double) x[(size_t) from + i] * x[(size_t) from + i + lag]; e1 += (double) x[(size_t) from + i + lag] * x[(size_t) from + i + lag]; }
+                c[(size_t) lag] = s / std::sqrt (e0 * e1 + 1e-18);
+            }
+            int best = lo; for (int lag = lo; lag <= hi; ++lag) if (c[(size_t) lag] > c[(size_t) best]) best = lag;
+            double lagF = best;
+            if (best > lo && best < hi) { const double a = c[(size_t) best - 1], b = c[(size_t) best], d = c[(size_t) best + 1]; const double den = a - 2 * b + d; if (std::fabs (den) > 1e-12) lagF += 0.5 * (a - d) / den; }
+            return (float) (1200.0 * std::log2 (p0 / lagF));
+        };
+        for (int src = 0; src < kNumSources; ++src)
+        {
+            float p[kNumParams]; pitchPatch (p);
+            p[src_type] = (float) src;
+            p[a_color] = src == 2 ? 0.55f : (src == 4 ? 0.6f : 0.f);          // pluck / struck: long enough to measure
+            for (int note : { 45, 57, 69, 81 })
+            {
+                const float hz = 440.f * std::pow (2.f, (float) (note - 69) / 12.f);
+                auto r = renderNotes (p, { note }, 1.f, 1.5f, 1.8f);
+                double e = 0, pk = 0; bool finite = true;
+                for (size_t i = 0; i < r.L.size(); ++i) { if (! std::isfinite (r.L[i])) finite = false; pk = std::max (pk, (double) std::fabs (r.L[i])); }
+                for (int i = (int) (0.05f * kSr); i < (int) (0.3f * kSr); ++i) e += (double) r.L[(size_t) i] * r.L[(size_t) i];
+                const double rmsDb = 10.0 * std::log10 (e / (0.25f * kSr) + 1e-12);
+                const float cents = acf (r.L, (int) (0.08f * kSr), (int) (0.12f * kSr), hz);
+                std::printf ("  %-10s note %2d: rms %.1f dB, peak %.2f, pitch error %+.1f ct\n", kSourceNames[src], note, rmsDb, pk, (double) cents);
+                CHECK (finite, "%s: NaN", kSourceNames[src]);
+                CHECK (rmsDb > -45.0, "%s note %d is silent (%.1f dB)", kSourceNames[src], note, rmsDb);
+                CHECK (pk < 1.6, "%s note %d peak %.2f", kSourceNames[src], note, pk);
+                CHECK (std::fabs (cents) < 12.f, "%s note %d is %.1f cents off", kSourceNames[src], note, (double) cents);
+            }
+        }
+
+        // a chord (8 voices) of every source, wild settings: CPU
+        for (int src = 0; src < kNumSources; ++src)
+        {
+            float p[kNumParams]; randomizeValues (777 + (uint32_t) src, 0.8f, p);
+            p[src_type] = (float) src; p[rvb_mix] = 0.3f;
+            const auto t0 = std::chrono::steady_clock::now();
+            auto r = renderNotes (p, { 40, 47, 52, 59, 64, 67, 71, 76 }, 0.9f, 3.f, 4.f);
+            const double sec = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+            bool finite = true; for (float v : r.L) if (! std::isfinite (v)) finite = false;
+            std::printf ("  %-10s 8 voices, 4 s rendered in %.3f s (%.1f%% of one core)\n", kSourceNames[src], sec, sec / 4.0 * 100.0);
+            CHECK (finite, "%s chord has NaN", kSourceNames[src]);
+            CHECK (sec / 4.0 < 0.5, "%s too heavy: %.0f%%", kSourceNames[src], sec / 4.0 * 100.0);
+        }
+
+        // a loaded wavetable replaces the built-in one
+        {
+            float p[kNumParams]; pitchPatch (p); p[src_type] = 1.f;
+            std::vector<float> x; for (int f = 0; f < 4; ++f) for (int i = 0; i < kWtSize; ++i) x.push_back ((float) std::sin (6.28318530717958 * 4 * i / kWtSize));   // a table of 4th harmonics
+            auto imp = importWavetable (x, 44100.0, "four");
+            auto builtin = renderNotes (p, { 57 }, 1.f, 1.f, 1.f);
+            Engine e; e.prepare (kSr); e.setParams (p); e.setUserWavetable (imp.table.get());
+            std::vector<float> L ((size_t) kSr), R ((size_t) kSr);
+            e.noteOn (57, 1.f);
+            for (int pos = 0; pos < (int) kSr; pos += 256) e.render (L.data() + pos, R.data() + pos, std::min (256, (int) kSr - pos));
+            const float hz = estimateHz (L, (int) (0.2f * kSr), (int) (0.9f * kSr));
+            std::printf ("  user table of 4th harmonics, note A3 (220 Hz): %.1f Hz (expect 880)\n", (double) hz);
+            CHECK (std::fabs (hz - 880.f) < 4.f, "user wavetable not played (%.1f Hz)", (double) hz);
+            e.setUserWavetable (nullptr);
+            (void) builtin;
+        }
+    }
+
     std::printf (failures == 0 ? "\nALL CHECKS PASSED\n" : "\n%d CHECK(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

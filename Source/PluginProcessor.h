@@ -5,6 +5,8 @@
 #include <vector>
 #include "Engine.h"
 #include "Randomizer.h"
+#include "Wavetable.h"
+#include <memory>
 
 class SeedProcessor : public juce::AudioProcessor
 {
@@ -63,11 +65,25 @@ public:
     juce::String getPresetName() const { return presetName; }
     void stepPreset (int direction);          // +1 next, -1 previous in the preset folder
 
+    // Custom wavetables / sampled sounds for the Wavetable source (message thread)
+    juce::String loadWavetableFile (const juce::File& file);   // returns a one-line message for the user
+    void clearWavetable();
+    bool hasUserWavetable() const { return userTable != nullptr; }
+    juce::String getWavetableInfo() const { return wavetableInfo; }
+    juce::File getWavetableDirectory() const;
+    std::vector<juce::File> listWavetables() const;
+
     juce::AudioProcessorValueTreeState apvts;
 
 private:
+    void installWavetable (std::shared_ptr<seed::Wavetable> t, const juce::String& info);
+    std::shared_ptr<seed::Wavetable> userTable;
+    std::vector<std::shared_ptr<seed::Wavetable>> retiredTables;   // kept alive a while so the audio thread never reads freed memory
+    juce::String wavetableInfo;
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    static bool writePresetFile (const juce::File& file, const float* values, uint32_t seedValue, const juce::String& name);
+    static bool writePresetFile (const juce::File& file, const float* values, uint32_t seedValue, const juce::String& name,
+                                 const seed::Wavetable* table, const juce::String& info);
     void handleMidi (const juce::MidiMessage&);
 
     seed::Engine engine;

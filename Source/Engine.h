@@ -2,6 +2,7 @@
 // Seedling DSP engine. Plain C++ (no JUCE) so it can be unit-tested offline.
 
 #include "Params.h"
+#include "Wavetable.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -41,6 +42,7 @@ struct Derived
     float fltType, fltK, fltHz, fltKf, fltMod, fltSep;     // fltK = 1/Q
     float sat, rvbMix, rvbAtk, rvbRt60, rvbDamp, rvbChor, rvbSize, rvbType;
     float bass, treb, pan, clip;
+    float srcType;                                         // 0 oscillator, 1 wavetable, 2 pluck, 3 vowel, 4 struck, 5 unison
     float glideSec, mono;                                 // glideSec 0 = off; mono >= 0.5 = monophonic
 };
 
@@ -171,6 +173,10 @@ public:
     void allNotesOff();
     void setPitchBend (float semitones);
     void setSustain (bool down);
+
+    // The wavetable the Wavetable source plays instead of the built-in one (nullptr = built-in). The caller keeps it alive
+    // until the next call. Safe to call from the message thread while audio runs.
+    void setUserWavetable (const Wavetable* table);
 
     // Renders n samples (overwrites L and R).
     void render (float* L, float* R, int n);

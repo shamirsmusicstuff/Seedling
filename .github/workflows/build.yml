@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: "0.4.0"
+  VERSION: "0.5.0"
 
 jobs:
   build:
@@ -46,6 +46,14 @@ jobs:
         run: |
           cmake --build build --config Release --target seed_palette_test
           ctest --test-dir build -C Release -R seed_palette --output-on-failure
+      - name: Wavetable import test (tables, sampled sounds, auto-tune)
+        run: |
+          cmake --build build --config Release --target seed_wavetable_test
+          ctest --test-dir build -C Release -R seed_wavetable --output-on-failure
+      - name: Archetype test (recipes, sources, reverbs)
+        run: |
+          cmake --build build --config Release --target seed_archetype_test
+          ctest --test-dir build -C Release -R seed_archetype --output-on-failure
       - name: Build
         shell: bash
         run: |

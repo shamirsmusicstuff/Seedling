@@ -241,7 +241,7 @@ int main()
         std::printf ("reverb types reached by 600 soft seeds: %d of 12\n", kinds);
         CHECK (kinds >= 10, "Randomize only reaches %d reverb types", kinds);
         CHECK (seen[5] + seen[6] > seen[11] + seen[10], "soft randomization should favour halls over gated/reverse");
-        CHECK (kParams[rvb_type].def == 0.f && rvb_type == kNumParams - 1, "rvb_type must stay the last parameter (appended)");
+        CHECK (kParams[rvb_type].def == 0.f && rvb_type == src_type - 1 && src_type == kNumParams - 1, "rvb_type and src_type must stay the last parameters (appended)");
     }
 
     std::printf (failures == 0 ? "REVERB OK\n" : "%d REVERB CHECK(S) FAILED\n", failures);

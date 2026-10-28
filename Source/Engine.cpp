@@ -1,6 +1,7 @@
 #include "Engine.h"
 #include "DuskVerbs.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -58,6 +59,7 @@ Derived makeDerived (const float* p)
     d.rvbChor = p[rvb_chor];
     d.rvbSize = p[rvb_size];
     d.rvbType = p[rvb_type];
+    d.srcType = std::round (clampf (p[src_type], 0.f, (float) (kNumSources - 1)));
 
     d.glideSec = p[glide] < 0.01f ? 0.f : 0.004f * std::pow (750.f, p[glide]);   // 4 ms .. 3 s
     d.mono = p[mono];
@@ -153,6 +155,16 @@ namespace
         Rng rng;
         Svf f1, f2;
 
+        // ---- extra sound sources (the A slot) -----------------------------------------------------------------------
+        bool primed = false;
+        static constexpr int kKsMask = 16383;
+        float ks[kKsMask + 1];                       // pluck: the string
+        int ksW = 0; float ksLp = 0.f, ksC = 0.5f, ksG = 0.99f;
+        float phU[7] = {};                           // unison: seven saw phases
+        Svf fv[3];                                   // vowel: three formant filters
+        float my1[6] = {}, my2[6] = {};              // struck: six resonators
+        float mC[6] = {}, mR2[6] = {}, mIn[6] = {};
+
         void start (int n, float v, int64_t order, uint32_t seedBits)
         {
             active = true; keyDown = true; sustained = false;
@@ -163,11 +175,45 @@ namespace
             nA = nB = 0.f;
             rng.s = 2463534242u ^ (seedBits * 2654435761u);
             f1.reset(); f2.reset();
+            primed = false;
+            for (auto& f : fv) f.reset();
+            ksLp = 0.f;
+            for (int k = 0; k < 6; ++k) my1[k] = my2[k] = 0.f;
         }
 
         void release() { keyDown = false; sustained = false; if (vstage != 0) vstage = 3; }
 
-        void render (float* out, int n, const Derived& d, float sr, float bend)
+        // Set up the A-slot source the first time a note renders (the knob values are known then).
+        void prime (const Derived& d, float sr, float baseHz)
+        {
+            const int src = (int) d.srcType;
+            if (src == 5)
+                for (int k = 0; k < 7; ++k) phU[k] = 0.5f * (rng.next() + 1.f);
+            if (src == 2)                                       // pluck: fill the string with a (softened) noise burst
+            {
+                const float f = std::max (20.f, baseHz);
+                const int len = std::min (kKsMask - 8, (int) std::ceil (sr / f) + 4);
+                const float c = 0.9f * (1.f - d.aNoise);        // soft pick -> dark burst, hard pick -> bright burst
+                float y = 0.f, mean = 0.f;
+                for (int i = 0; i < len; ++i) { y = (1.f - c) * rng.next() + c * y; ks[i] = y; mean += y; }
+                mean /= (float) len;
+                float e2 = 0.f;
+                for (int i = 0; i < len; ++i) { ks[i] -= mean; e2 += ks[i] * ks[i]; }
+                const float norm = 0.4f / std::sqrt (e2 / (float) len + 1e-9f);          // the same strike level on every note
+                for (int i = 0; i < len; ++i) ks[i] *= norm;
+                for (int i = len; i <= kKsMask; ++i) ks[i] = 0.f;
+                ksW = len; ksLp = 0.f;
+            }
+            if (src == 4)                                       // struck: the strike sets the resonators ringing
+            {
+                const float k = 0.6f + 0.4f * vel;
+                for (int i = 0; i < 6; ++i) { my1[i] = 0.f; my2[i] = -k / (1.f + 0.6f * (float) i); }   // scaled by sin(w) when the coefficients are set
+                strikePending = true;
+            }
+        }
+        bool strikePending = false;
+
+        void render (float* out, int n, const Derived& d, float sr, float bend, const Wavetable* wt)
         {
             const float noteRel = (float) (note - 60);
             const float vs = d.envScale * std::exp2 (-d.envKf * noteRel / 12.f);
@@ -193,6 +239,8 @@ namespace
             const float lfoInc = d.lfoHz / sr;
             const float lfoDelayS = d.lfoDelay * sr;
             const float holdInc = d.bHoldHz > 0.f ? d.bHoldHz / sr : 0.f;
+            const int src = (int) d.srcType;
+            if (! primed) { prime (d, sr, baseA); primed = true; }
             const float gSep = std::exp2 (d.fltSep * 3.f);
             float fcBase = d.fltHz * std::exp2 (d.fltKf * pitchRel / 12.f);
             const float fcMax = 0.45f * sr;
@@ -257,14 +305,131 @@ namespace
                 phSub += dtB * 0.5f; if (phSub >= 1.f) phSub -= 1.f;
                 b += d.sub * std::sin (kTwoPi * phSub);
 
-                // --- oscillator A, phase-modulated by B ----------------------------
+                // --- the A slot: oscillator, wavetable, pluck, vowel, struck or unison ----------------------------
                 const float fmDepth = clampf (d.fmAmt + d.fmMod * m, 0.f, 1.f);
-                phA += dtA; if (phA >= 1.f) phA -= 1.f;
-                float pm = phA + fmDepth * fmDepth * 1.5f * b;
-                pm -= std::floor (pm);
-                const float pw = d.aColor > 0.f ? colorWarp (pm, d.aColor) : pm;
+                const float fmPh = fmDepth * fmDepth * 1.5f * b;
                 nA += 0.35f * (rng.next() - nA);
-                const float a = morphShape (false, d.aForm + d.aMod * m, pw, dtA) + d.aNoise * 1.6f * nA;
+                float a = 0.f;
+                switch (src)
+                {
+                    default:
+                    {   // 0: two-oscillator morph, phase-modulated by B
+                        phA += dtA; if (phA >= 1.f) phA -= 1.f;
+                        float pm = phA + fmPh; pm -= std::floor (pm);
+                        const float pw = d.aColor > 0.f ? colorWarp (pm, d.aColor) : pm;
+                        a = morphShape (false, d.aForm + d.aMod * m, pw, dtA) + d.aNoise * 1.6f * nA;
+                        break;
+                    }
+                    case 1:
+                    {   // wavetable: A Form scans the frames, colour warps the phase, FM from B works as on the oscillator
+                        phA += dtA; if (phA >= 1.f) phA -= 1.f;
+                        float pm = phA + fmPh; pm -= std::floor (pm);
+                        const float pw = d.aColor > 0.f ? colorWarp (pm, d.aColor) : pm;
+                        a = wt->read (d.aForm + d.aMod * m, pw, Wavetable::levelFor (dtA)) + d.aNoise * 1.6f * nA;
+                        break;
+                    }
+                    case 2:
+                    {   // pluck (Karplus-Strong): A Form = brightness, A Color = how long it rings, A Noise = pick hardness
+                        const float f = std::max (20.f, dtA * sr);
+                        if ((i & 7) == 0)
+                        {
+                            // the loop filter is the classic two-tap average (1-b, b): it loses almost nothing at the fundamental and
+                            // more and more towards the top, so A Form sets the brightness and A Color alone sets how long it rings
+                            const float bright = clampf (d.aForm + d.aMod * m, 0.f, 1.f);
+                            ksC = 0.5f * (1.f - bright) + 0.004f;
+                            const float w0 = kTwoPi * f / sr;
+                            const float mag = std::sqrt (std::max (0.25f, 1.f - 2.f * ksC * (1.f - ksC) * (1.f - std::cos (w0))));
+                            const float T = 0.1f * std::pow (120.f, d.aColor);
+                            ksG = std::min (0.99995f, std::exp (-6.9f / (T * f)) / mag);
+                        }
+                        const float c = ksC, g = ksG;
+                        const float delay = std::max (2.f, sr / f - c);
+                        const float rp = (float) ksW - delay;
+                        const int i0 = (int) std::floor (rp);
+                        const float fr = rp - (float) i0;
+                        auto at = [this] (int k) { return ks[k & kKsMask]; };
+                        const float xm1 = at (i0 - 1), x0 = at (i0), x1 = at (i0 + 1), x2 = at (i0 + 2);
+                        const float c1 = 0.5f * (x1 - xm1), c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2, c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+                        const float y = ((c3 * fr + c2) * fr + c1) * fr + x0;
+                        ks[ksW & kKsMask] = ((1.f - c) * y + c * ksLp) * g;
+                        ksLp = y;
+                        ++ksW;
+                        a = y * 1.4f;
+                        break;
+                    }
+                    case 3:
+                    {   // vowel: a glottal pulse through three formant filters. A Form = vowel (a e i o u), Color = pulse shape, Noise = breath
+                        static const float F[5][3] = { { 800.f, 1150.f, 2800.f }, { 400.f, 1600.f, 2700.f }, { 350.f, 1700.f, 2700.f },
+                                                       { 450.f, 800.f, 2830.f }, { 325.f, 700.f, 2530.f } };
+                        phA += dtA; if (phA >= 1.f) phA -= 1.f;
+                        const float vp = clampf (d.aForm + d.aMod * m, 0.f, 1.f) * 4.f;
+                        const int vi = std::min (3, (int) vp);
+                        const float vf = vp - (float) vi;
+                        const float src0 = sawShape (phA, dtA) * (1.f - d.aColor) + 0.9f * pulseShape (phA, 0.14f, dtA) * d.aColor + d.aNoise * 1.6f * nA;
+                        static const float G[3] = { 1.f, 0.7f, 0.45f };
+                        float v = 0.f;
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            const float fc = clampf (F[vi][k] + (F[vi + 1][k] - F[vi][k]) * vf, 80.f, 0.45f * sr);
+                            v += G[k] * fv[k].process (src0, std::tan (kPi * fc / sr), 0.14f, 0.5f);
+                        }
+                        a = v * 1.5f;
+                        break;
+                    }
+                    case 4:
+                    {   // struck: six ringing modes. A Form = what was hit (harmonic, marimba, bar, bell, membrane),
+                        //         A Color = how long it rings, A Noise = keeps it excited (bowed / blown)
+                        static const float R[5][6] = { { 1.f, 2.f, 3.f, 4.f, 5.f, 6.f }, { 1.f, 3.9f, 9.9f, 17.6f, 27.6f, 39.8f },
+                                                       { 1.f, 2.76f, 5.4f, 8.93f, 13.34f, 18.64f }, { 0.56f, 0.92f, 1.19f, 1.71f, 2.f, 2.74f },
+                                                       { 1.f, 1.59f, 2.14f, 2.3f, 2.65f, 2.92f } };
+                        if ((i & 7) == 0)
+                        {
+                            const float sp = clampf (d.aForm + d.aMod * m, 0.f, 1.f) * 4.f;
+                            const int si = std::min (3, (int) sp);
+                            const float sf = sp - (float) si;
+                            const float T0 = 0.05f * std::pow (160.f, d.aColor);
+                            const float f0 = std::max (20.f, baseA * vibMul);
+                            for (int k = 0; k < 6; ++k)
+                            {
+                                const float fk = f0 * (R[si][k] + (R[si + 1][k] - R[si][k]) * sf);
+                                const float Tk = T0 / (1.f + 0.7f * (float) k);
+                                const float r = fk < 0.45f * sr ? std::exp (-6.9f / (Tk * sr)) : 0.f;
+                                const float w = kTwoPi * fk / sr;
+                                mC[k] = 2.f * r * std::cos (w);
+                                mR2[k] = r * r;
+                                mIn[k] = (1.f - r) * 3.f / (1.f + 0.6f * (float) k);
+                                if (strikePending) my2[k] *= std::sin (w) * (r > 0.f ? 1.f : 0.f);       // first call: turn the strike into the starting state
+                            }
+                            strikePending = false;
+                        }
+                        const float x = d.aNoise * 0.5f * nA * 6.f;
+                        float v = 0.f;
+                        for (int k = 0; k < 6; ++k)
+                        {
+                            const float y = mC[k] * my1[k] - mR2[k] * my2[k] + x * mIn[k];
+                            my2[k] = my1[k]; my1[k] = y;
+                            v += y;
+                        }
+                        a = v * 0.9f;
+                        break;
+                    }
+                    case 5:
+                    {   // unison: seven detuned saws. A Form = detune, A Color = saw -> square, FM from B works too
+                        static const float OFF[7] = { -1.f, -0.62f, -0.27f, 0.f, 0.27f, 0.62f, 1.f };
+                        const float spread = 0.04f + 0.55f * std::pow (clampf (d.aForm + d.aMod * m, 0.f, 1.f), 1.5f);
+                        const float shapeForm = 0.667f + 0.333f * d.aColor;
+                        float v = 0.f;
+                        for (int k = 0; k < 7; ++k)
+                        {
+                            const float dtk = std::min (0.49f, dtA * std::exp2 (OFF[k] * spread / 12.f));
+                            phU[k] += dtk; if (phU[k] >= 1.f) phU[k] -= 1.f;
+                            float pm = phU[k] + fmPh; pm -= std::floor (pm);
+                            v += morphShape (false, shapeForm, pm, dtk);
+                        }
+                        a = v * 0.42f + d.aNoise * 1.6f * nA;
+                        break;
+                    }
+                }
 
                 // --- mix --------------------------------------------------------
                 const float mx = clampf (d.mix + d.mixMod * m, 0.f, 1.f);
@@ -304,6 +469,8 @@ struct Engine::Impl
     float lastPitch = -1.f;       // where the mono voice last was, so the next note can glide from it
     float mixBuf[kChunk] = {};
     float dcX = 0.f, dcY = 0.f;
+    std::shared_ptr<Wavetable> builtinWt = makeBuiltinWavetable();
+    std::atomic<const Wavetable*> userWt { nullptr };
     Reverb rvb;
     Biquad lowL, lowR, highL, highR;
     float lastBass = 1e9f, lastTreb = 1e9f;
@@ -439,7 +606,8 @@ struct Engine::Impl
             const int c = std::min (kChunk, n - pos);
             updateParams (c);
             std::memset (mixBuf, 0, sizeof (mixBuf));
-            for (auto& v : voices) if (v.active) v.render (mixBuf, c, d, sr, bend);
+            const Wavetable* wt = userWt.load (std::memory_order_acquire); if (! wt) wt = builtinWt.get();
+            for (auto& v : voices) if (v.active) v.render (mixBuf, c, d, sr, bend, wt);
             if (monoMode() && voices[0].active) lastPitch = voices[0].glideNote;
 
             const float panA = (d.pan + 1.f) * kPi * 0.25f;
@@ -484,6 +652,7 @@ void Engine::setParams (const float* v) { std::memcpy (impl->tgt, v, sizeof (flo
 void Engine::noteOn (int note, float vel) { impl->noteOn (note, vel); }
 void Engine::noteOff (int note) { impl->noteOff (note); }
 void Engine::allNotesOff() { for (auto& v : impl->voices) if (v.active) v.release(); impl->sustain = false; impl->held.clear(); }
+void Engine::setUserWavetable (const Wavetable* table) { impl->userWt.store (table, std::memory_order_release); }
 void Engine::setPitchBend (float semitones) { impl->bend = semitones; }
 void Engine::setSustain (bool down) { impl->setSustain (down); }
 void Engine::render (float* L, float* R, int n) { impl->render (L, R, n); }

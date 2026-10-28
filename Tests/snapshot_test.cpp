@@ -459,6 +459,60 @@ int main (int argc, char** argv)
         std::printf ("reverb type selector: ok\n");
     }
 
+    // sound sources + custom wavetables
+    {
+        proc.setReal (seed::src_type, 0.f);
+        editor->showPageForTest (1);
+        editor->syncForTest();
+        CHECK (editor->sourceNameForTest() == "Oscillator" && ! editor->wavetableButtonVisibleForTest(), "source selector should start on Oscillator");
+        editor->stepSourceForTest (+1);
+        CHECK (editor->sourceNameForTest() == "Wavetable" && editor->wavetableButtonVisibleForTest(), "Wavetable source should show the load button");
+        editor->stepSourceForTest (-2);
+        CHECK (editor->sourceNameForTest() == "Unison", "previous from Oscillator should wrap to Unison");
+        proc.setReal (seed::src_type, 1.f);
+        editor->stepSourceForTest (0);
+        { auto img = editor->createComponentSnapshot (editor->getLocalBounds()); juce::PNGImageFormat png; juce::FileOutputStream fo (outDir.getChildFile ("page2_wavetable.png")); fo.setPosition (0); fo.truncate(); png.writeImageToStream (img, fo); }
+
+        // a recording of a sine-ish note at 230 Hz (a little off A3) must be detected, tuned and survive presets + host state
+        const double sr = 44100.0;
+        juce::MemoryOutputStream wav;
+        const int n = (int) sr;
+        wav.write ("RIFF", 4); wav.writeInt (36 + n * 2); wav.write ("WAVEfmt ", 8); wav.writeInt (16);
+        wav.writeShort (1); wav.writeShort (1); wav.writeInt ((int) sr); wav.writeInt ((int) sr * 2); wav.writeShort (2); wav.writeShort (16);
+        wav.write ("data", 4); wav.writeInt (n * 2);
+        for (int i = 0; i < n; ++i)
+        {
+            const double ph = 6.283185307179586 * 230.0 * i / sr;
+            wav.writeShort ((short) std::lround (12000.0 * (std::sin (ph) + 0.4 * std::sin (2 * ph) + 0.2 * std::sin (3 * ph)) / 1.6));
+        }
+        const auto wf = outDir.getChildFile ("test_sample.wav");
+        wf.replaceWithData (wav.getData(), wav.getDataSize());
+        const auto msg = proc.loadWavetableFile (wf);
+        std::printf ("wavetable import: %s\n", msg.toRawUTF8());
+        CHECK (proc.hasUserWavetable() && msg.containsIgnoreCase ("pitch"), "a pitched sample should load and report its pitch: '%s'", msg.toRawUTF8());
+        editor->syncForTest();
+        CHECK (editor->wavetableInfoForTest() == proc.getWavetableInfo(), "info line should show the import message");
+
+        const auto pf2 = outDir.getChildFile ("table_roundtrip.seedling");
+        proc.savePreset (pf2);
+        proc.clearWavetable();
+        CHECK (! proc.hasUserWavetable(), "clear should return to the built-in table");
+        proc.loadPreset (pf2);
+        CHECK (proc.hasUserWavetable(), "the table should come back with the preset");
+        juce::MemoryBlock state;
+        proc.getStateInformation (state);
+        proc.clearWavetable();
+        proc.setStateInformation (state.getData(), (int) state.getSize());
+        CHECK (proc.hasUserWavetable(), "the table should come back with the host session");
+        const auto bad = outDir.getChildFile ("junk.wav");
+        bad.replaceWithText ("not a wav");
+        proc.loadWavetableFile (bad);
+        CHECK (proc.hasUserWavetable(), "a failed load must keep the current table");
+        proc.clearWavetable();
+        proc.setReal (seed::src_type, 0.f);
+        std::printf ("sources + wavetable: ok\n");
+    }
+
     std::printf (failures == 0 ? "ALL CHECKS PASSED\n" : "%d CHECK(S) FAILED\n", failures);
     ed.reset();
     return failures == 0 ? 0 : 1;

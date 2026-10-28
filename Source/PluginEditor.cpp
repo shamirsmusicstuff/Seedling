@@ -31,7 +31,7 @@ namespace
         { 14, 276 }, { 90, 276 }, { 14, 342 }, { 90, 342 }, { 14, 408 }, { 90, 408 },  // rvb_*
         { 14, 484 }, { 90, 484 }, { 520, 484 }, { 596, 484 },                          // adj_bass adj_treb adj_pan adj_clip
     // Play mode (page II)
-    { 300, 204 }, { 0, 0 }, { 0, 0 }                                               // glide (mono is a switch, rvb_type has its own selector: both placed in resized())
+    { 300, 204 }, { 0, 0 }, { 0, 0 }, { 0, 0 }                                               // glide (mono is a switch, rvb_type has its own selector: both placed in resized())
     };
 
     float hashRnd (int k)
@@ -825,6 +825,21 @@ SeedView::SeedView (SeedProcessor& p) : proc (p)
     typeLabel.setFont (ui::font (14.f, 2));
     typeLabel.setInterceptsMouseClicks (false, false);
     for (auto* c : std::initializer_list<juce::Component*> { &typePrev, &typeNext, &typeLabel }) addChildComponent (c);
+
+    // sound source: < name >  and, for Wavetable, a menu to load your own table or sampled sound
+    srcPrev.setTooltip ("Previous sound source");
+    srcNext.setTooltip ("Next sound source: Oscillator, Wavetable, Pluck, Vowel, Struck, Unison");
+    srcPrev.onClick = [this] { stepSource (-1); };
+    srcNext.onClick = [this] { stepSource (+1); };
+    srcLabel.setJustificationType (juce::Justification::centred);
+    srcLabel.setFont (ui::font (14.f, 2));
+    srcLabel.setInterceptsMouseClicks (false, false);
+    wtBtn.setTooltip ("Load your own wavetable (Serum-style) or a recording. Recordings are pitch-detected and tuned so they play in tune on every key.");
+    wtBtn.onClick = [this] { showWavetableMenu(); };
+    wtInfo.setJustificationType (juce::Justification::centredLeft);
+    wtInfo.setFont (ui::font (12.f, 0));
+    wtInfo.setInterceptsMouseClicks (false, false);
+    for (auto* c : std::initializer_list<juce::Component*> { &srcPrev, &srcNext, &srcLabel, &wtBtn, &wtInfo }) addChildComponent (c);
     updateTypeLabel();
     dv = makeDerived (vals);
 
@@ -936,6 +951,7 @@ void SeedView::setHomeView (bool h)
     for (auto& f : figures) f.comp->setVisible (! h && f.page == page);
     monoBtn.setVisible (! h && page == 1);
     for (auto* c : std::initializer_list<juce::Component*> { &typePrev, &typeNext, &typeLabel }) c->setVisible (! h && page == 2);
+    updateSourceUi();
     rebuildBackdrop();
     repaint();
 }
@@ -950,6 +966,7 @@ void SeedView::setPage (int newPage)
     for (auto& f : figures) f.comp->setVisible (! homeView && f.page == page);
     monoBtn.setVisible (! homeView && page == 1);
     for (auto* c : std::initializer_list<juce::Component*> { &typePrev, &typeNext, &typeLabel }) c->setVisible (! homeView && page == 2);
+    updateSourceUi();
     repaint();
 }
 
@@ -991,12 +1008,71 @@ void SeedView::resized()
     typePrev.setBounds (kContentX + 360, kContentY + 228, 28, 28);
     typeLabel.setBounds (kContentX + 392, kContentY + 228, 196, 28);
     typeNext.setBounds (kContentX + 592, kContentY + 228, 28, 28);
+    srcPrev.setBounds (kContentX + 200, kContentY + 142, 28, 28);
+    srcLabel.setBounds (kContentX + 232, kContentY + 142, 120, 28);
+    srcNext.setBounds (kContentX + 356, kContentY + 142, 28, 28);
+    wtBtn.setBounds (kContentX + 394, kContentY + 142, 130, 28);
+    wtInfo.setBounds (kContentX + 200, kContentY + 172, 380, 20);
+}
+
+void SeedView::updateSourceUi()
+{
+    const int s = juce::jlimit (0, kNumSources - 1, (int) std::lround (proc.getReal (src_type)));
+    if (srcLabel.getText() != kSourceNames[s]) srcLabel.setText (kSourceNames[s], juce::dontSendNotification);
+    const bool show = ! homeView && page == 1;
+    for (auto* c : std::initializer_list<juce::Component*> { &srcPrev, &srcNext, &srcLabel }) c->setVisible (show);
+    wtBtn.setVisible (show && s == 1);
+    wtInfo.setVisible (show && s == 1);
+    juce::String info = proc.hasUserWavetable() ? proc.getWavetableInfo()
+                      : (wtMessage.isNotEmpty() ? wtMessage : juce::String ("Built-in wavetable. Load your own with the button."));
+    if (wtInfo.getText() != info) wtInfo.setText (info, juce::dontSendNotification);
+}
+
+void SeedView::stepSource (int dir)
+{
+    const int t = (int) std::lround (proc.getReal (src_type));
+    proc.setReal (src_type, (float) (((t + dir) % kNumSources + kNumSources) % kNumSources));
+    updateSourceUi();
+}
+
+void SeedView::showWavetableMenu()
+{
+    juce::PopupMenu m;
+    const auto files = proc.listWavetables();
+    m.addSectionHeader ("Documents/Seedling/Wavetables");
+    int id = 100;
+    for (const auto& f : files) { if (id > 160) break; m.addItem (id++, f.getFileNameWithoutExtension()); }
+    if (files.empty()) m.addItem (-1, "(folder is empty)", false, false);
+    m.addSeparator();
+    m.addItem (1, "Load file...");
+    m.addItem (2, "Open folder");
+    m.addItem (3, "Use built-in wavetable", proc.hasUserWavetable());
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&wtBtn), [this, files] (int r)
+    {
+        if (r >= 100 && r - 100 < (int) files.size())
+        {
+            wtMessage = proc.loadWavetableFile (files[(size_t) (r - 100)]);
+            updateSourceUi();
+        }
+        else if (r == 1)
+        {
+            wtChooser = std::make_shared<juce::FileChooser> ("Choose a wavetable or sample (WAV)", proc.getWavetableDirectory(), "*.wav");
+            wtChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc)
+            {
+                const auto f = fc.getResult();
+                if (f.existsAsFile()) { wtMessage = proc.loadWavetableFile (f); updateSourceUi(); }
+            });
+        }
+        else if (r == 2) proc.getWavetableDirectory().startAsProcess();
+        else if (r == 3) { proc.clearWavetable(); wtMessage = {}; updateSourceUi(); }
+    });
 }
 
 void SeedView::updateTypeLabel()
 {
     const int t = juce::jlimit (0, kNumReverbTypes - 1, (int) std::lround (proc.getReal (rvb_type)));
     if (typeLabel.getText() != kReverbNames[t]) typeLabel.setText (kReverbNames[t], juce::dontSendNotification);
+    updateSourceUi();
 }
 
 void SeedView::stepReverbType (int dir)

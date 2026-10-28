@@ -20,7 +20,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SeedProcessor::createLayout(
         if (d.flags & fStep)
         {
             juce::StringArray names;
-            for (auto* n : kReverbNames) names.add (n);
+            if (juce::String (d.id) == "src_type") for (auto* n : kSourceNames) names.add (n);
+            else                                    for (auto* n : kReverbNames) names.add (n);
             layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { d.id, 1 }, d.name, names, (int) d.def));
             continue;
         }
@@ -114,9 +115,72 @@ void SeedProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBu
 juce::AudioProcessorEditor* SeedProcessor::createEditor() { return new SeedEditor (*this); }
 
 //==============================================================================
+static juce::String tableToBase64 (const seed::Wavetable& t)
+{
+    const auto bytes = seed::serializeWavetable (t);
+    return juce::Base64::toBase64 (bytes.data(), bytes.size());
+}
+
+static std::shared_ptr<seed::Wavetable> tableFromBase64 (const juce::String& text)
+{
+    if (text.isEmpty()) return nullptr;
+    juce::MemoryOutputStream out;
+    if (! juce::Base64::convertFromBase64 (out, text)) return nullptr;
+    return seed::deserializeWavetable ((const uint8_t*) out.getData(), out.getDataSize());
+}
+
+void SeedProcessor::installWavetable (std::shared_ptr<seed::Wavetable> t, const juce::String& info)
+{
+    auto old = userTable;
+    userTable = std::move (t);
+    wavetableInfo = userTable ? info : juce::String();
+    engine.setUserWavetable (userTable.get());
+    if (old)
+    {
+        retiredTables.push_back (std::move (old));
+        if (retiredTables.size() > 4) retiredTables.erase (retiredTables.begin());
+    }
+}
+
+juce::String SeedProcessor::loadWavetableFile (const juce::File& file)
+{
+    juce::MemoryBlock data;
+    if (! file.loadFileAsData (data) || data.getSize() == 0) return "Could not read that file.";
+    auto r = seed::importWavBytes ((const uint8_t*) data.getData(), data.getSize(),
+                                   file.getFileNameWithoutExtension().toStdString());
+    if (! r.table) return juce::String (r.message);
+    installWavetable (r.table, juce::String (r.message));
+    return wavetableInfo;
+}
+
+void SeedProcessor::clearWavetable() { installWavetable (nullptr, {}); }
+
+juce::File SeedProcessor::getWavetableDirectory() const
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                   .getChildFile ("Seedling").getChildFile ("Wavetables");
+    dir.createDirectory();
+    return dir;
+}
+
+std::vector<juce::File> SeedProcessor::listWavetables() const
+{
+    std::vector<juce::File> out;
+    for (const auto& f : getWavetableDirectory().findChildFiles (juce::File::findFiles, true, "*.wav;*.WAV"))
+        out.push_back (f);
+    std::sort (out.begin(), out.end(), [] (const juce::File& a, const juce::File& b)
+               { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+    return out;
+}
+
 void SeedProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     auto state = apvts.copyState();
+    if (userTable)
+    {
+        state.setProperty ("wavetable", tableToBase64 (*userTable), nullptr);
+        state.setProperty ("wavetableInfo", wavetableInfo, nullptr);
+    }
     state.setProperty ("seed", (juce::int64) currentSeed.load(), nullptr);
     state.setProperty ("preset", presetName, nullptr);
     if (auto xml = state.createXml())
@@ -131,6 +195,12 @@ void SeedProcessor::setStateInformation (const void* data, int size)
             auto tree = juce::ValueTree::fromXml (*xml);
             currentSeed = (uint32_t) (juce::int64) tree.getProperty ("seed", 0);
             presetName = tree.getProperty ("preset", "init").toString();
+            if (auto t = tableFromBase64 (tree.getProperty ("wavetable", "").toString()))
+                installWavetable (t, tree.getProperty ("wavetableInfo", "").toString());
+            else
+                installWavetable (nullptr, {});
+            tree.removeProperty ("wavetable", nullptr);
+            tree.removeProperty ("wavetableInfo", nullptr);
             apvts.replaceState (tree);
         }
 }
@@ -173,11 +243,12 @@ void SeedProcessor::randomize (uint32_t seedValue)
     setAllReal (v);
     currentSeed = seedValue;
     presetName = "seed " + juce::String (seedValue);
+    if (const char* an = seed::archetype::nameForSeed (seedValue)) presetName += juce::String (" - ") + an;
 }
 
 void SeedProcessor::randomizeNew()
 {
-    randomize ((uint32_t) juce::Random::getSystemRandom().nextInt (999999) + 1);
+    randomize (kFirstArchetypeSeed + (uint32_t) juce::Random::getSystemRandom().nextInt ((int) kSeedRange));
 }
 
 void SeedProcessor::correctTune()
@@ -208,7 +279,8 @@ std::vector<juce::File> SeedProcessor::listPresets() const
     return out;
 }
 
-bool SeedProcessor::writePresetFile (const juce::File& file, const float* values, uint32_t seedValue, const juce::String& name)
+bool SeedProcessor::writePresetFile (const juce::File& file, const float* values, uint32_t seedValue, const juce::String& name,
+                                   const seed::Wavetable* table, const juce::String& info)
 {
     juce::XmlElement root ("SeedlingPreset");
     root.setAttribute ("version", 1);
@@ -220,6 +292,12 @@ bool SeedProcessor::writePresetFile (const juce::File& file, const float* values
         e->setAttribute ("id", kParams[i].id);
         e->setAttribute ("v", (double) values[i]);
     }
+    if (table)
+    {
+        auto* w = root.createNewChildElement ("Wavetable");
+        w->setAttribute ("info", info);
+        w->addTextElement (tableToBase64 (*table));
+    }
     return root.writeTo (file);
 }
 
@@ -228,7 +306,7 @@ bool SeedProcessor::savePreset (const juce::File& file)
     float v[kNumParams];
     for (int i = 0; i < kNumParams; ++i) v[i] = getReal (i);
     const auto name = file.getFileNameWithoutExtension();
-    if (! writePresetFile (file, v, currentSeed.load(), name)) return false;
+    if (! writePresetFile (file, v, currentSeed.load(), name, userTable.get(), wavetableInfo)) return false;
     presetName = name;
     return true;
 }
@@ -249,6 +327,16 @@ bool SeedProcessor::loadPreset (const juce::File& file)
             if (id == kParams[i].id)
                 v[i] = juce::jlimit (kParams[i].lo, kParams[i].hi, (float) e->getDoubleAttribute ("v", kParams[i].def));
     }
+
+    if (auto* w = xml->getChildByName ("Wavetable"))
+    {
+        if (auto t = tableFromBase64 (w->getAllSubText().trim()))
+            installWavetable (t, w->getStringAttribute ("info"));
+        else
+            installWavetable (nullptr, {});
+    }
+    else
+        installWavetable (nullptr, {});
 
     setAllReal (v);
     currentSeed = (uint32_t) xml->getIntAttribute ("seed", 0);
@@ -283,7 +371,7 @@ void SeedProcessor::ensureFactoryPresets()
         randomizeValues (s, 0.15f, v);
         seed::correctTune (v);
         const auto name = "Soft " + juce::String (n++).paddedLeft ('0', 2);
-        writePresetFile (getPresetDirectory().getChildFile (name + ".seedling"), v, s, name);
+        writePresetFile (getPresetDirectory().getChildFile (name + ".seedling"), v, s, name, nullptr, {});
     }
 }
 

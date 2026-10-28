@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Seedling VERSION 0.4.0 LANGUAGES C CXX)
+project(Seedling VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,6 +57,8 @@ target_sources(Seedling PRIVATE
     Source/DuskPlate.h
     Source/Palette.h
     Source/Randomizer.h
+    Source/Archetypes.h
+    Source/Wavetable.h
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
@@ -115,6 +117,17 @@ if(NOT MSVC)
 endif()
 add_test(NAME seed_palette COMMAND seed_palette_test)
 add_test(NAME engine COMMAND seed_engine_test)
+
+add_executable(seed_wavetable_test EXCLUDE_FROM_ALL Tests/wavetable_test.cpp)
+target_include_directories(seed_wavetable_test PRIVATE Source)
+add_test(NAME seed_wavetable COMMAND seed_wavetable_test)
+
+add_executable(seed_archetype_test EXCLUDE_FROM_ALL Tests/archetype_test.cpp)
+target_include_directories(seed_archetype_test PRIVATE Source)
+if(NOT MSVC)
+    target_compile_options(seed_archetype_test PRIVATE -ffp-contract=off)
+endif()
+add_test(NAME seed_archetype COMMAND seed_archetype_test)
 
 # Offscreen UI snapshot + processor test (renders the 3 pages to PNG):  cmake --build . --target seedling_snapshot
 juce_add_console_app(seedling_snapshot PRODUCT_NAME "seedling_snapshot")

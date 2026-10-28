@@ -3,6 +3,7 @@
 // The generator uses its own PRNG so the same seed gives the same patch on every OS/compiler.
 
 #include "Params.h"
+#include "Archetypes.h"
 #include <cmath>
 #include <cstdint>
 
@@ -47,7 +48,7 @@ inline void correctTune (float* values)
 
 // ---- Randomize ---------------------------------------------------------------
 // chaos 0 = soft and light (narrow, centre-weighted ranges), 1 = anything goes.
-inline void randomizeValues (uint32_t seedValue, float chaos, float* out)
+inline void randomizeLegacy (uint32_t seedValue, float chaos, float* out)
 {
     chaos = chaos < 0.f ? 0.f : (chaos > 1.f ? 1.f : chaos);
     SplitMix rng ((uint64_t) seedValue * 0x9E3779B1ull + 0x51ED270Bull);
@@ -75,6 +76,73 @@ inline void randomizeValues (uint32_t seedValue, float chaos, float* out)
         if (p.flags & fNoRandom) v = p.def;
         out[i] = v < p.lo ? p.lo : (v > p.hi ? p.hi : v);
     }
+}
+
+
+// ---- Randomize, version 2 (seeds from 1,000,000): pick an archetype, then draw every knob from its ranges ----------------
+inline void randomizeArchetype (uint32_t seedValue, float chaos, float* out)
+{
+    chaos = chaos < 0.f ? 0.f : (chaos > 1.f ? 1.f : chaos);
+    const archetype::Archetype& A = archetype::kList[archetype::indexForSeed (seedValue)];
+
+    SplitMix rng ((uint64_t) seedValue * 0xD1B54A32D192ED03ull + 0xA5CE7E0DE5ull);
+    rng.next();
+
+    // the sound source and the reverb: one of the recipe's choices; "wild" sometimes ignores the recipe
+    auto pickBit = [] (uint32_t mask, float u, int count)
+    {
+        int n = 0;
+        for (int i = 0; i < count; ++i) if (mask & (1u << i)) ++n;
+        if (n == 0) return 0;
+        int k = std::min (n - 1, (int) (u * (float) n));
+        for (int i = 0; i < count; ++i) if ((mask & (1u << i)) && k-- == 0) return i;
+        return 0;
+    };
+    const float uSrc = rng.next(), uRev = rng.next(), uWildSrc = rng.next(), uWildRev = rng.next(), uWildPick1 = rng.next(), uWildPick2 = rng.next();
+    int src = pickBit (A.src, uSrc, kNumSources);
+    int rev = pickBit (A.rev, uRev, kNumReverbTypes);
+    if (uWildSrc < 0.5f * chaos) src = std::min (kNumSources - 1, (int) (uWildPick1 * (float) kNumSources));
+    if (uWildRev < 0.6f * chaos) rev = std::min (kNumReverbTypes - 1, (int) (uWildPick2 * (float) kNumReverbTypes));
+
+    for (int i = 0; i < kNumParams; ++i)
+    {
+        const ParamDef& p = kParams[i];
+        float baseLo = p.softLo, baseHi = p.softHi;
+        for (const auto& o : A.ov)
+            if (o.p == i) { baseLo = o.lo; baseHi = o.hi; break; }
+        const float lo = baseLo + (p.lo - baseLo) * chaos;
+        const float hi = baseHi + (p.hi - baseHi) * chaos;
+
+        const float u1 = rng.next(), u2 = rng.next(), gate = rng.next();
+        const float tri = 0.5f * (u1 + u2);
+        const float u = tri + (u1 - tri) * chaos;
+        float v = lo + (hi - lo) * u;
+
+        bool overridden = false;
+        for (const auto& o : A.ov) if (o.p == i) { overridden = true; break; }
+        if ((p.flags & fOffBias) && ! overridden && gate < 0.6f - 0.45f * chaos)
+            v = p.def;
+        if ((p.flags & fStar) && ! (p.flags & fSemitone))
+            v = p.def + (v - p.def) * 0.5f;
+
+        if (p.flags & fStep) v = std::round (v);
+        if (p.flags & fNoRandom) v = p.def;
+        out[i] = v < p.lo ? p.lo : (v > p.hi ? p.hi : v);
+    }
+    out[src_type] = (float) src;
+    out[rvb_type] = (float) rev;
+}
+
+// One entry point: the seed number says which generator grows the patch.
+inline void randomizeValues (uint32_t seedValue, float chaos, float* out)
+{
+    if (seedValue >= kFirstArchetypeSeed)
+    {
+        randomizeArchetype (seedValue, chaos, out);
+        return;
+    }
+    randomizeLegacy (seedValue, chaos, out);
+    out[src_type] = 0.f;                       // the sound source did not exist for these seeds: they keep the dual oscillator
 }
 
 } // namespace seed

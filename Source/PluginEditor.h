@@ -155,6 +155,10 @@ public:
     void setSkinForTest (const seed::Skin& k) { ui::apply (k); skinName = k.name; lnf.applyPalette(); sendLookAndFeelChange(); rebuildBackdrop(); repaint(); }
     void setSeedColoursForTest (uint32_t seedValue);
     void stepReverbTypeForTest (int dir) { stepReverbType (dir); }
+    void stepSourceForTest (int dir) { stepSource (dir); }
+    juce::String sourceNameForTest() const { return srcLabel.getText(); }
+    bool wavetableButtonVisibleForTest() const { return wtBtn.isVisible(); }
+    juce::String wavetableInfoForTest() const { return wtInfo.getText(); }
     juce::String reverbTypeNameForTest() const { return typeLabel.getText(); }
     void syncForTest() { timerCallback(); driftT = 0.0; }
     void setDriftForTest (double beats) { driftT = beats; lastDriftClock = 0.0; }
@@ -166,6 +170,9 @@ private:
     void setHomeView (bool home);
     void refreshLabels();
     void updateTypeLabel();
+    void updateSourceUi();
+    void stepSource (int dir);
+    void showWavetableMenu();
     void stepReverbType (int dir);
     void loadSkins();
     void followSeed();
@@ -227,6 +234,10 @@ private:
     juce::ToggleButton monoBtn { "mono" };
     juce::TextButton typePrev { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")) }, typeNext { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")) };
     juce::Label typeLabel;
+    juce::TextButton srcPrev { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xb9")) }, srcNext { juce::String (juce::CharPointer_UTF8 ("\xe2\x80\xba")) }, wtBtn { "Wavetable..." };
+    juce::Label srcLabel, wtInfo;
+    juce::String wtMessage;
+    std::shared_ptr<juce::FileChooser> wtChooser;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoAttach;
     std::vector<seed::Skin> skinList;
     juce::String skinName, skinProblems;

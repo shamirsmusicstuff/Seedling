@@ -17,7 +17,7 @@ enum Flags : uint8_t
     fSemitone = 8,  // value is in semitones (tuning-sensitive)
     fSwitch   = 16, // on/off switch (shown as a button, host sees a bool)
     fNoRandom = 32, // Randomize leaves this alone (it is a playing mode, not a sound)
-    fStep     = 64  // whole-number choice (the reverb type): the host sees a list, Randomize rounds
+    fStep     = 64  // whole-number choice (reverb type, sound source): the host sees a list, Randomize rounds
 };
 
 struct ParamDef
@@ -52,6 +52,8 @@ enum P : int
     glide, mono,
     // ---- Reverb type (appended after mono: the first 48 parameters, and so every saved seed, are untouched) -----
     rvb_type,
+    // ---- Sound source of the A slot (appended: seeds below 1,000,000 always keep the dual oscillator) -----------
+    src_type,
 
     kNumParams
 };
@@ -122,7 +124,12 @@ inline constexpr ParamDef kParams[kNumParams] =
     { "glide",     "Glide",             0.f,   1.f,  0.0f,  0.00f, 0.30f, gPlay, 1, fNoRandom },
     { "mono",      "Mono",              0.f,   1.f,  0.0f,  0.00f, 1.00f, gPlay, 1, fSwitch | fNoRandom },
     { "rvb_type",  "Reverb Type",       0.f,  11.f,  0.0f,  0.00f,11.00f, gRvb,  2, fStep },
+    { "src_type",  "Sound Source",      0.f,   5.f,  0.0f,  0.00f, 5.00f, gOscA, 1, fStep },
 };
+
+// The A slot can be one of six sound sources (the oscillator B layer, filter, effects work with all of them).
+inline constexpr int kNumSources = 6;
+inline constexpr const char* kSourceNames[kNumSources] = { "Oscillator", "Wavetable", "Pluck", "Vowel", "Struck", "Unison" };
 
 // The twelve reverbs, in the order of the type selector (the engine index in Source/DuskVerbs.h).
 inline constexpr int kNumReverbTypes = 12;
