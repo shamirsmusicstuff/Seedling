@@ -4,6 +4,7 @@
 
 #include "Params.h"
 #include "Archetypes.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
