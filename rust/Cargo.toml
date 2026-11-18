@@ -1,0 +1,25 @@
+[package]
+name = "seedling"
+version = "0.5.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Seedling - a random-patch synth that grows sounds from a seed"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "plugin/src/lib.rs"
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683", default-features = false, features = ["vst3"] }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "de421011f41a6d10fc8c7a6084e4f4dee0143683" }
+seedling-dsp = { path = "dsp" }
+parking_lot = "0.12"
+
+[workspace]
+members = ["xtask"]
+exclude = ["dsp"]
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+opt-level = 3
