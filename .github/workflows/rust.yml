@@ -1,0 +1,46 @@
+name: Build Seedling (Rust)
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  dsp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: DSP tests (engine, sources, wavetable import, reverbs, generator)
+        working-directory: rust/dsp
+        run: cargo test --release
+  plugin:
+    needs: dsp
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libgl-dev libjack-dev libx11-xcb-dev libxcb1-dev libxcb-dri2-0-dev libxcb-icccm4-dev libxcursor-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Plugin storage tests
+        working-directory: rust
+        run: cargo test --release --lib
+      - name: Bundle VST3 + CLAP
+        working-directory: rust
+        run: cargo xtask bundle seedling --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seedling-rust-${{ matrix.os }}
+          path: rust/target/bundled/*
