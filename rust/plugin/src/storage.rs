@@ -64,6 +64,7 @@ fn ensure(dir: PathBuf) -> PathBuf {
     dir
 }
 
+pub fn seedling_root() -> PathBuf { ensure(documents_dir().join("Seedling")) }
 pub fn wavetable_dir() -> PathBuf { ensure(documents_dir().join("Seedling").join("Wavetables")) }
 pub fn preset_dir() -> PathBuf { ensure(documents_dir().join("Seedling").join("Presets")) }
 

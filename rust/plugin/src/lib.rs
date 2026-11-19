@@ -2,6 +2,7 @@
 
 mod editor;
 mod params_gen;
+mod skins;
 mod storage;
 
 use nih_plug::prelude::*;

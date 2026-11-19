@@ -3,6 +3,17 @@ on:
   push:
     branches: ['**']
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a GitHub release (v<VERSION>-rust) with the installers'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  VERSION: "0.6.0"
 
 jobs:
   dsp:
@@ -34,7 +45,7 @@ jobs:
             ~/.cargo/git
             rust/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
-      - name: Plugin storage tests
+      - name: Plugin tests (storage, presets, skins)
         working-directory: rust
         run: cargo test --release --lib
       - name: Bundle VST3 + CLAP
@@ -44,3 +55,62 @@ jobs:
         with:
           name: seedling-rust-${{ matrix.os }}
           path: rust/target/bundled/*
+
+      - name: Audio Unit (clap-wrapper)
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S rust/au -B build-au -DCMAKE_BUILD_TYPE=Release -DSEEDLING_CLAP="$PWD/rust/target/bundled/Seedling.clap" -DSEEDLING_VERSION="$VERSION"
+          cmake --build build-au --config Release -j 4
+          find build-au -name "Seedling.component" -maxdepth 3
+      - name: Validate Audio Unit with auval (informational)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          AU="$(find build-au -name Seedling.component -maxdepth 3 | head -1)"
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          rm -rf ~/Library/Audio/Plug-Ins/Components/Seedling.component
+          cp -R "$AU" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -a | grep -i "Sdlg" || echo "Seedling not listed by auval -a"
+          auval -v aumu Sdrs Sdlg 2>&1 | tail -40
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1 -ExpandProperty FullName }
+          $b = (Resolve-Path rust/target/bundled).Path
+          & $iscc "/DSeedVer=$env:VERSION" "/DVst3=$b\Seedling.vst3" "/DClap=$b\Seedling.clap" installer/windows/seedling_rust.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Move-Item installer/windows/Seedling-Rust-*-Windows-Setup.exe dist/
+      - name: Installer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          AU="$(find build-au -name Seedling.component -maxdepth 3 | head -1)"
+          installer/macos/build_pkg_rust.sh "$VERSION" rust/target/bundled/Seedling.vst3 rust/target/bundled/Seedling.clap "${AU:--}" dist
+      - uses: actions/upload-artifact@v4
+        if: runner.os != 'Linux'
+        with:
+          name: Seedling-Rust-installer-${{ matrix.os }}
+          path: dist/*
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Seedling-Rust-installer-*
+          merge-multiple: true
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}-rust
+          name: Seedling ${{ env.VERSION }} (Rust)
+          files: dist/*
+          generate_release_notes: true
