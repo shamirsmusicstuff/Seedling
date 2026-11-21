@@ -34,4 +34,4 @@ Presets are plain text files in `Documents/Seedling/Presets`.
 
 ## Not yet in the Rust version
 
-Skins and seed-derived colours, the animated tree and BPM-synced gradient, the 3D tree. The window is resizable.
+Skins and seed-derived colours (paused while the new look settles), the 3D tree. The window scales freely; the growing tree and the wave background run on the host tempo.

@@ -1,124 +1,124 @@
-//! The egui editor: three pages of knobs (I. Envelope and LFO, II. Oscillators, III. Filter and effects), Randomize, seed entry,
-//! Correct Tune, presets and the wavetable menu.
+//! The egui editor. Everything is drawn with the painter in a 1200 x 900 design space that scales with the window:
+//! animated indigo waves and grain behind, the growing tree on the left running through the three page boxes, a big tree on
+//! the home page, level-fill circle knobs, selector pills and a row of buttons along the bottom.
 
-use crate::skins::{self, Skin, SEED_COLOURS};
-use crate::{storage, Shared};
+use crate::{scope, storage, tree, Shared};
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, resizable_window::ResizableWindow, EguiState};
 use seedling_dsp::archetypes::{name_for_seed, FIRST_ARCHETYPE_SEED, SEED_RANGE};
 use seedling_dsp::params::*;
 use seedling_dsp::randomizer::{correct_tune, random_values, SplitMix};
 use seedling_dsp::wavetable::import_wav_bytes;
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke, Vec2};
+use egui::epaint::{Mesh, TextShape};
+use egui::{Align, Align2, Color32, FontFamily, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, TextureHandle, Vec2};
 
-/// Colours of the current skin, worked out once per frame.
-#[derive(Clone, Copy)]
-struct Theme {
-    bg: Color32,
-    panel: Color32,
-    track: Color32,
-    accent: Color32,
-    /// body text (mist)
-    text: Color32,
-    /// secondary text
-    dim: Color32,
-    /// headings and highlights (paper)
-    bright: Color32,
-}
+const W: f32 = 1200.0;
+const H: f32 = 900.0;
+const CREAM: Color32 = Color32::from_rgb(238, 234, 255);
+const INK: Color32 = Color32::from_rgb(5, 4, 15);
 
-fn c32(c: skins::Rgb) -> Color32 { Color32::from_rgb(c[0], c[1], c[2]) }
+fn semi() -> FontFamily { FontFamily::Name("semi".into()) }
+fn ital() -> FontFamily { FontFamily::Name("ital".into()) }
 
-impl Theme {
-    fn from_skin(s: &Skin) -> Self {
-        Theme {
-            bg: c32(s.ink),
-            panel: c32(skins::mix(s.ink, s.slate, 0.28)),
-            track: c32(skins::mix(s.ink, s.slate, 0.55)),
-            accent: c32(s.accent),
-            text: c32(s.mist),
-            dim: c32(skins::mix(s.mist, s.ink, 0.35)),
-            bright: c32(s.paper),
-        }
-    }
-
-    fn visuals(&self) -> egui::Visuals {
-        let mut v = egui::Visuals::dark();
-        v.panel_fill = self.bg;
-        v.window_fill = self.panel;
-        v.override_text_color = Some(self.text);
-        v.widgets.inactive.bg_fill = self.panel;
-        v.widgets.inactive.weak_bg_fill = self.panel;
-        v.widgets.hovered.weak_bg_fill = self.track;
-        v.widgets.hovered.bg_fill = self.track;
-        v.widgets.active.weak_bg_fill = self.accent;
-        v.widgets.active.bg_fill = self.accent;
-        v.selection.bg_fill = self.accent;
-        v
-    }
+#[derive(Clone, Copy, PartialEq)]
+enum Popup {
+    None,
+    Presets,
+    Wavetables,
 }
 
 pub struct UiState {
-    page: usize,
+    /// 0 envelope & LFO, 1 oscillators, 2 filter & effects, 3 home
+    view: usize,
+    last_edit: usize,
     seed_text: String,
     preset_name: String,
     status: String,
     rng: SplitMix,
-    skins: Vec<Skin>,
-    /// the colours on screen right now (glides towards the chosen skin)
-    shown: Skin,
+    popup: Popup,
+    tree: tree::Tree,
+    /// seconds since the tree started growing
+    grow_t: f32,
+    /// seconds since the editor opened (twinkles)
+    clock: f32,
+    /// host-tempo clock in beats (waves, orbit and waveforms move with it)
+    beats: f32,
+    grain: Option<TextureHandle>,
+    grain_shift: (f32, f32),
+    grain_timer: f32,
 }
 
 pub fn create(shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
     let egui_state: Arc<EguiState> = shared.params.editor_state.clone();
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
-    let (skin_list, _) = skins::load_all();
     let state = UiState {
-        shown: skins::from_seed(shared.params.seed.load(Ordering::Relaxed)),
-        skins: skin_list,
-        page: 0,
+        view: 3,
+        last_edit: 0,
         seed_text: String::new(),
         preset_name: String::from("My patch"),
         status: String::from("Press Randomize to grow a new sound."),
         rng: SplitMix::new(nanos ^ 0x9E37_79B9_7F4A_7C15),
+        popup: Popup::None,
+        tree: tree::Tree::build(),
+        grow_t: 0.0,
+        clock: 0.0,
+        beats: 0.0,
+        grain: None,
+        grain_shift: (0.0, 0.0),
+        grain_timer: 0.0,
     };
     let window_state = egui_state.clone();
     create_egui_editor(
         egui_state,
         state,
-        |_ctx, _| {},
+        |ctx, _| install_fonts(ctx),
         move |ctx, setter, state| {
-            let th = advance_theme(ctx, &shared, state);
-            ctx.set_visuals(th.visuals());
-            ResizableWindow::new("seedling-window").min_size(Vec2::new(640.0, 480.0)).show(ctx, window_state.as_ref(), |ui| {
-                draw(ui, &shared, setter, state, &th);
+            ctx.set_visuals(visuals());
+            ResizableWindow::new("seedling-window").min_size(Vec2::new(600.0, 450.0)).show(ctx, window_state.as_ref(), |ui| {
+                draw(ui, &shared, setter, state);
             });
         },
     )
 }
 
-fn chosen_skin(shared: &Shared, st: &UiState) -> Skin {
-    let seed = shared.params.seed.load(Ordering::Relaxed);
-    let name = shared.params.skin.lock().map(|s| s.clone()).unwrap_or_default();
-    if name.is_empty() || name == SEED_COLOURS {
-        return skins::from_seed(seed);
-    }
-    st.skins.iter().find(|s| s.name == name).cloned().unwrap_or_else(|| skins::from_seed(seed))
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let data = |b: &'static [u8]| Arc::new(egui::FontData::from_static(b));
+    fonts.font_data.insert("bodoni".into(), data(include_bytes!("../fonts/BodoniModa-Medium.ttf")));
+    fonts.font_data.insert("bodoni_semi".into(), data(include_bytes!("../fonts/BodoniModa-SemiBold.ttf")));
+    fonts.font_data.insert("bodoni_ital".into(), data(include_bytes!("../fonts/BodoniModa-MediumItalic.ttf")));
+    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "bodoni".into());
+    let fallback = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let mut with = |first: &str| {
+        let mut list: Vec<String> = vec![first.to_string()];
+        list.extend(fallback.iter().filter(|n| n.as_str() != first).cloned());
+        list
+    };
+    let semi_list = with("bodoni_semi");
+    let ital_list = with("bodoni_ital");
+    fonts.families.insert(semi(), semi_list);
+    fonts.families.insert(ital(), ital_list);
+    ctx.set_fonts(fonts);
 }
 
-/// Glides the colours on screen towards the chosen skin (a new seed's colours arrive over about half a second).
-fn advance_theme(ctx: &egui::Context, shared: &Shared, st: &mut UiState) -> Theme {
-    let target = chosen_skin(shared, st);
-    if st.shown != target {
-        let next = skins::mix_skin(&st.shown, &target, 0.14);
-        let near = |a: skins::Rgb, b: skins::Rgb| (0..3).all(|i| (a[i] as i32 - b[i] as i32).abs() <= 1);
-        let done = near(next.ink, target.ink) && near(next.accent, target.accent) && near(next.slate, target.slate) && near(next.mist, target.mist) && near(next.paper, target.paper);
-        st.shown = if done { target } else { next };
-        ctx.request_repaint();
-    }
-    Theme::from_skin(&st.shown)
+fn visuals() -> egui::Visuals {
+    let mut v = egui::Visuals::dark();
+    v.panel_fill = INK;
+    v.window_fill = Color32::from_rgb(14, 11, 46);
+    v.window_stroke = Stroke::new(2.0, CREAM);
+    v.override_text_color = Some(CREAM);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(26, 20, 84);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(26, 20, 84);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(58, 46, 190);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(58, 46, 190);
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(90, 76, 240);
+    v.widgets.active.bg_fill = Color32::from_rgb(90, 76, 240);
+    v.selection.bg_fill = Color32::from_rgb(90, 76, 240);
+    v
 }
 
 // ---- parameter helpers ------------------------------------------------------------------------------------------
@@ -185,271 +185,679 @@ fn clear_wavetable(shared: &Shared) {
     shared.slot.set(None);
 }
 
-// ---- widgets ----------------------------------------------------------------------------------------------------
-
-fn arc_points(c: Pos2, r: f32, a0: f32, a1: f32) -> Vec<Pos2> {
-    let n = (((a1 - a0).abs() / 0.12) as usize).max(2);
-    (0..=n).map(|k| { let a = a0 + (a1 - a0) * k as f32 / n as f32; c + Vec2::new(a.cos(), a.sin()) * r }).collect()
+fn load_preset(setter: &ParamSetter, shared: &Shared, path: &std::path::Path) -> String {
+    let params = &shared.params;
+    let ptrs = params.ptrs();
+    let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    match std::fs::read_to_string(path).ok().and_then(|t| storage::preset_from_text(&t)) {
+        Some(p) => {
+            apply_values(setter, shared, &p.values);
+            for i in 0..NUM_PARAMS {
+                if PARAMS[i].flags & NO_RANDOM != 0 { set_norm(setter, ptrs[i], to_norm(i, p.values[i])); }
+            }
+            params.seed.store(p.seed, Ordering::Relaxed);
+            match storage::table_from_text(&p.wavetable) {
+                Some(t) => {
+                    if let Ok(mut g) = params.wavetable.lock() { *g = p.wavetable.clone(); }
+                    if let Ok(mut g) = params.wavetable_info.lock() { *g = p.wavetable_info.clone(); }
+                    shared.slot.set(Some(Arc::new(t)));
+                }
+                None => clear_wavetable(shared),
+            }
+            format!("Loaded {name}")
+        }
+        None => "That preset could not be read.".into(),
+    }
 }
 
-fn knob(ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, i: usize, th: &Theme) {
-    let def = &PARAMS[i];
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(66.0, 92.0), Sense::hover());
-    let resp = ui.interact(rect, ui.id().with(("knob", i)), Sense::click_and_drag());
-    let mut norm = unsafe { ptr.unmodulated_normalized_value() };
+// ---- drawing helpers --------------------------------------------------------------------------------------------
 
+/// The painter plus the transform from the 1200 x 900 design space to the screen.
+struct View {
+    p: egui::Painter,
+    o: Pos2,
+    s: f32,
+}
+
+impl View {
+    fn pt(&self, x: f32, y: f32) -> Pos2 { Pos2::new(self.o.x + x * self.s, self.o.y + y * self.s) }
+    fn rect(&self, x: f32, y: f32, w: f32, h: f32) -> Rect { Rect::from_min_size(self.pt(x, y), Vec2::new(w * self.s, h * self.s)) }
+    fn reg(&self, size: f32) -> FontId { FontId::new(size * self.s, FontFamily::Proportional) }
+    fn bold(&self, size: f32) -> FontId { FontId::new(size * self.s, semi()) }
+    fn it(&self, size: f32) -> FontId { FontId::new(size * self.s, ital()) }
+    fn text(&self, x: f32, y: f32, anchor: Align2, text: &str, font: FontId, color: Color32) {
+        self.p.text(self.pt(x, y), anchor, text, font, color);
+    }
+    /// Text running top to bottom, its right edge at design x `right`, centred on design y `cy`.
+    fn vtext(&self, right: f32, cy: f32, text: &str, size: f32) {
+        let galley = self.p.layout_no_wrap(text.to_string(), self.it(size), CREAM);
+        let w = galley.size().x;
+        let pos = Pos2::new(self.o.x + right * self.s, self.o.y + cy * self.s - w / 2.0);
+        self.p.add(TextShape::new(pos, galley, CREAM).with_angle(FRAC_PI_2));
+    }
+    fn outline(&self, r: Rect, radius: f32, fill: Color32, width: f32, color: Color32) {
+        self.p.rect(r, radius * self.s, fill, Stroke::new(width * self.s, color), StrokeKind::Inside);
+    }
+}
+
+fn lerp_c(a: [f32; 3], b: [f32; 3], t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    Color32::from_rgb(
+        (a[0] + (b[0] - a[0]) * t) as u8,
+        (a[1] + (b[1] - a[1]) * t) as u8,
+        (a[2] + (b[2] - a[2]) * t) as u8,
+    )
+}
+
+/// Wave fill colour: #3a2ee6 at the back, #150d7a in the middle, #05040f at the front.
+fn wave_grad(f: f32) -> Color32 {
+    let (a, b, c) = ([58.0, 46.0, 230.0], [21.0, 13.0, 122.0], [5.0, 4.0, 15.0]);
+    if f < 0.5 { lerp_c(a, b, f * 2.0) } else { lerp_c(b, c, (f - 0.5) * 2.0) }
+}
+
+fn rotate_about(x: f32, y: f32) -> (f32, f32) {
+    let a = -8.0f32.to_radians();
+    let (dx, dy) = (x - 600.0, y - 450.0);
+    (600.0 + dx * a.cos() - dy * a.sin(), 450.0 + dx * a.sin() + dy * a.cos())
+}
+
+fn background(v: &View, full: Rect, st: &UiState) {
+    v.p.rect_filled(full, 0.0, INK);
+    let p = v.p.with_clip_rect(full);
+
+    // ridges: back to front
+    for i in 0..10usize {
+        let fi = i as f32;
+        let base = 250.0 + fi * 62.0;
+        let amp = 16.0 + fi * 4.5;
+        let n = if i % 3 == 0 { 1.0 } else { 2.0 };
+        let period = 1200.0 / n;
+        let px_per_beat = 1200.0 / (140.0 + 18.0 * fi);
+        let off = TAU * (st.beats * px_per_beat) / period;
+        let phase = fi * 1.7;
+        let top_c = wave_grad(fi / 9.0);
+        let bot_c = wave_grad(((fi + 1.0) / 9.0).min(1.0));
+        let mut mesh = Mesh::default();
+        let mut rim: Vec<Pos2> = Vec::new();
+        let steps = 64usize;
+        for k in 0..=steps {
+            let x = -250.0 + 1700.0 * k as f32 / steps as f32;
+            let a = TAU * x / period + phase - off;
+            let y = base + amp * a.sin() + 0.3 * amp * (3.0 * a + 0.7).sin();
+            let (tx, ty) = rotate_about(x, y);
+            let (bx, by) = rotate_about(x, base + amp + 420.0);
+            let top = v.pt(tx, ty);
+            mesh.colored_vertex(top, top_c);
+            mesh.colored_vertex(v.pt(bx, by), bot_c);
+            rim.push(top);
+        }
+        for k in 0..steps as u32 {
+            let a = 2 * k;
+            mesh.add_triangle(a, a + 1, a + 2);
+            mesh.add_triangle(a + 2, a + 1, a + 3);
+        }
+        p.add(Shape::mesh(mesh));
+        let alpha = ((0.55 - 0.04 * fi).max(0.05) * 255.0) as u8;
+        p.add(Shape::line(rim, Stroke::new(1.6 * v.s, Color32::from_rgba_unmultiplied(207, 194, 255, alpha))));
+    }
+
+    // glow at the upper right
+    let mut glow = Mesh::default();
+    let centre = v.pt(W * 0.86, H * 0.10);
+    glow.colored_vertex(centre, Color32::from_rgba_unmultiplied(120, 104, 255, 90));
+    let ring = 28u32;
+    for k in 0..ring {
+        let a = TAU * k as f32 / ring as f32;
+        glow.colored_vertex(centre + Vec2::new(a.cos(), a.sin()) * 520.0 * v.s, Color32::TRANSPARENT);
+    }
+    for k in 0..ring {
+        glow.add_triangle(0, 1 + k, 1 + (k + 1) % ring);
+    }
+    p.add(Shape::mesh(glow));
+
+    // shade on the left, behind the tree and boxes
+    let mut shade = Mesh::default();
+    let (l, r) = (full.left(), v.pt(460.0, 0.0).x);
+    shade.colored_vertex(Pos2::new(l, full.top()), Color32::from_black_alpha(150));
+    shade.colored_vertex(Pos2::new(r, full.top()), Color32::TRANSPARENT);
+    shade.colored_vertex(Pos2::new(r, full.bottom()), Color32::TRANSPARENT);
+    shade.colored_vertex(Pos2::new(l, full.bottom()), Color32::from_black_alpha(150));
+    shade.add_triangle(0, 1, 2);
+    shade.add_triangle(0, 2, 3);
+    p.add(Shape::mesh(shade));
+}
+
+fn make_grain(ctx: &egui::Context) -> TextureHandle {
+    let n = 128usize;
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut px = Vec::with_capacity(n * n * 4);
+    for _ in 0..n * n {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let v = (state >> 24) as u8;
+        px.extend_from_slice(&[v, v, v, 30]);
+    }
+    let img = egui::ColorImage::from_rgba_unmultiplied([n, n], &px);
+    ctx.load_texture("seedling-grain", img, egui::TextureOptions::NEAREST)
+}
+
+fn grain_overlay(v: &View, full: Rect, st: &UiState) {
+    let Some(tex) = &st.grain else { return };
+    let tile = 160.0 * v.s;
+    let mut mesh = Mesh::with_texture(tex.id());
+    let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+    let (ox, oy) = (st.grain_shift.0 * tile, st.grain_shift.1 * tile);
+    let mut y = full.top() - tile + oy;
+    while y < full.bottom() {
+        let mut x = full.left() - tile + ox;
+        while x < full.right() {
+            mesh.add_rect_with_uv(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(tile)), uv, Color32::WHITE);
+            x += tile;
+        }
+        y += tile;
+    }
+    v.p.with_clip_rect(full).add(Shape::mesh(mesh));
+}
+
+fn ellipse_pts(cx: f32, cy: f32, rx: f32, ry: f32, n: usize, v: &View) -> Vec<Pos2> {
+    (0..=n).map(|k| { let a = TAU * k as f32 / n as f32; v.pt(cx + rx * a.cos(), cy + ry * a.sin()) }).collect()
+}
+
+fn draw_tree(v: &View, tr: &tree::Tree, m: tree::Map, grow_t: f32, clock: f32) {
+    for b in &tr.branches {
+        let frac = b.grown(grow_t);
+        if frac <= 0.0 {
+            continue;
+        }
+        let n = ((frac * 16.0).ceil() as usize).max(2);
+        let pts: Vec<Pos2> = (0..=n)
+            .map(|i| {
+                let q = m.pt(b.at(frac * i as f32 / n as f32));
+                v.pt(q.0, q.1)
+            })
+            .collect();
+        v.p.add(Shape::line(pts, Stroke::new(b.width * m.k * v.s, Color32::from_white_alpha((b.opacity * 255.0) as u8))));
+    }
+    // dots only on the free ends of limbs and roots, appearing as their branch finishes
+    for tip in &tr.tips {
+        let a = ((grow_t - tip.done - 0.05) / 0.35).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            continue;
+        }
+        let q = m.pt(tip.at);
+        let c = v.pt(q.0, q.1);
+        let r = 2.3 * m.k * 0.95 * v.s;
+        if tip.lit {
+            let tw = 0.75 + 0.25 * (clock * 2.0 + tip.twinkle).sin();
+            v.p.circle_filled(c, r * 1.43 * 2.1, Color32::from_white_alpha((a * tw * 64.0) as u8));
+            v.p.circle_filled(c, r * 1.43, Color32::from_white_alpha((a * 255.0) as u8));
+        } else {
+            v.p.circle_filled(c, r, Color32::from_rgba_unmultiplied(3, 3, 22, (a * 255.0) as u8));
+            v.p.circle_stroke(c, r, Stroke::new(1.3 * v.s, Color32::from_white_alpha((a * 255.0) as u8)));
+        }
+    }
+    // the seed at the base of the trunk
+    let s = m.pt((450.0, 344.0));
+    let c = v.pt(s.0, s.1);
+    let (rx, ry) = (4.0 * m.k * 0.9 * v.s, 6.0 * m.k * 0.9 * v.s);
+    let pts: Vec<Pos2> = (0..20).map(|k| { let a = TAU * k as f32 / 20.0; c + Vec2::new(rx * a.cos(), ry * a.sin()) }).collect();
+    v.p.add(Shape::convex_polygon(pts, Color32::from_white_alpha(235), Stroke::NONE));
+}
+
+// ---- widgets ----------------------------------------------------------------------------------------------------
+
+fn short_label(id: &str) -> String {
+    match id {
+        "sub_am" => "SUB".into(),
+        "b_sh" => "S&H".into(),
+        "a_freq" | "b_freq" => "FREQ".into(),
+        "flt_kf" | "env_kf" => "KEY".into(),
+        "adj_clip" => "CLIP".into(),
+        "adj_bass" => "BASS".into(),
+        "adj_treb" => "TREBLE".into(),
+        "adj_pan" => "PAN".into(),
+        "saturate" => "DRIVE".into(),
+        "osc_mix" => "A-B".into(),
+        _ => match id.split_once('_') {
+            Some((_, rest)) => rest.to_uppercase(),
+            None => id.to_uppercase(),
+        },
+    }
+}
+
+/// A circle that fills from the bottom with the value. Drag up and down, shift for fine, double-click for the default.
+fn knob(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, key: usize, def_norm: f32, label: &str, cx: f32, top: f32, d: f32) {
+    let rect = v.rect(cx - d / 2.0 - 6.0, top, d + 12.0, d + 40.0);
+    let resp = ui.interact(rect, ui.id().with(("knob", key)), Sense::click_and_drag());
+    let mut norm = unsafe { ptr.unmodulated_normalized_value() };
     if resp.drag_started() { unsafe { setter.raw_context.raw_begin_set_parameter(ptr) }; }
     if resp.dragged() {
-        let fine = ui.input(|inp| inp.modifiers.shift);
-        let dy = -resp.drag_delta().y * if fine { 0.0007 } else { 0.006 };
+        let fine = ui.input(|i| i.modifiers.shift);
+        let dy = -resp.drag_delta().y / v.s * if fine { 0.0007 } else { 0.006 };
         norm = (norm + dy).clamp(0.0, 1.0);
         unsafe { setter.raw_context.raw_set_parameter_normalized(ptr, norm) };
     }
     if resp.drag_stopped() { unsafe { setter.raw_context.raw_end_set_parameter(ptr) }; }
     if resp.double_clicked() {
-        norm = to_norm(i, def.def);
+        norm = def_norm;
         set_norm(setter, ptr, norm);
     }
-
-    let p = ui.painter();
-    let c = Pos2::new(rect.center().x, rect.top() + 32.0);
-    let (a0, a1) = (std::f32::consts::PI * 0.75, std::f32::consts::PI * 2.25);
-    p.add(Shape::line(arc_points(c, 25.0, a0, a1), Stroke::new(3.0, th.track)));
-    let val_a = a0 + (a1 - a0) * norm;
-    let from = if def.flags & BIPOLAR != 0 { a0 + (a1 - a0) * 0.5 } else { a0 };
-    let (lo_a, hi_a) = if val_a >= from { (from, val_a) } else { (val_a, from) };
-    if hi_a - lo_a > 0.01 {
-        p.add(Shape::line(arc_points(c, 25.0, lo_a, hi_a), Stroke::new(3.5, if resp.hovered() || resp.dragged() { th.bright } else { th.accent })));
+    let active = resp.hovered() || resp.dragged();
+    let c = v.pt(cx, top + d / 2.0);
+    let r = d / 2.0 * v.s;
+    v.p.circle_filled(c, r, Color32::from_rgba_unmultiplied(3, 3, 22, 90));
+    if norm > 0.004 {
+        let th0 = (1.0 - 2.0 * norm).clamp(-1.0, 1.0).asin();
+        let n = 40usize;
+        let a0 = th0;
+        let a1 = PI - th0;
+        let pts: Vec<Pos2> = (0..=n).map(|k| { let a = a0 + (a1 - a0) * k as f32 / n as f32; c + Vec2::new(a.cos(), a.sin()) * r }).collect();
+        v.p.add(Shape::convex_polygon(pts, Color32::from_rgba_unmultiplied(205, 195, 255, if active { 150 } else { 115 }), Stroke::NONE));
     }
-    p.circle_filled(c, 17.0, th.panel);
-    p.circle_stroke(c, 17.0, Stroke::new(1.0, th.dim));
-    p.line_segment([c + Vec2::new(val_a.cos(), val_a.sin()) * 6.0, c + Vec2::new(val_a.cos(), val_a.sin()) * 15.0], Stroke::new(2.0, th.bright));
+    v.p.circle_stroke(c, r, Stroke::new(if active { 5.0 } else { 4.0 } * v.s, CREAM));
+    v.text(cx, top + d + 7.0, Align2::CENTER_TOP, label, v.bold(12.0), CREAM);
+    let shown = unsafe { ptr.normalized_value_to_string(norm, false) };
+    v.text(cx, top + d + 22.0, Align2::CENTER_TOP, &shown, v.it(13.0), CREAM);
+}
 
-    let shown = if resp.hovered() || resp.dragged() {
-        unsafe { ptr.normalized_value_to_string(norm, false) }
-    } else {
-        String::new()
+/// Round on/off switch drawn like a knob.
+fn toggle(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, key: usize, label: &str, on: bool, cx: f32, top: f32, d: f32) {
+    let rect = v.rect(cx - d / 2.0 - 6.0, top, d + 12.0, d + 40.0);
+    let resp = ui.interact(rect, ui.id().with(("toggle", key)), Sense::click());
+    if resp.clicked() { set_norm(setter, ptr, if on { 0.0 } else { 1.0 }); }
+    let c = v.pt(cx, top + d / 2.0);
+    let r = d / 2.0 * v.s;
+    v.p.circle_filled(c, r, if on { Color32::from_rgba_unmultiplied(205, 195, 255, 150) } else { Color32::from_rgba_unmultiplied(3, 3, 22, 90) });
+    v.p.circle_stroke(c, r, Stroke::new(if resp.hovered() { 5.0 } else { 4.0 } * v.s, CREAM));
+    v.text(cx, top + d / 2.0 - 8.0, Align2::CENTER_TOP, if on { "ON" } else { "OFF" }, v.bold(15.0), CREAM);
+    v.text(cx, top + d + 7.0, Align2::CENTER_TOP, label, v.bold(12.0), CREAM);
+}
+
+fn pill_fill(hover: bool) -> Color32 {
+    if hover { Color32::from_rgba_unmultiplied(80, 66, 200, 120) } else { Color32::from_rgba_unmultiplied(3, 3, 22, 102) }
+}
+
+/// Selector pill with `<` `>` ends. Returns -1 or +1 when the left or right half is clicked.
+fn pill_select(v: &View, ui: &mut egui::Ui, key: usize, x: f32, y: f32, w: f32, label: &str, value: &str) -> i32 {
+    let rect = v.rect(x, y, w, 44.0);
+    let resp = ui.interact(rect, ui.id().with(("pill", key)), Sense::click());
+    v.outline(rect, 22.0, pill_fill(resp.hovered()), 3.0, CREAM);
+    v.text(x + 38.0, y + 22.0, Align2::LEFT_CENTER, label, v.bold(11.0), CREAM);
+    v.text(x + w / 2.0 + 10.0, y + 22.0, Align2::CENTER_CENTER, value, v.it(17.0), CREAM);
+    let st = Stroke::new(2.0 * v.s, CREAM);
+    let cy = y + 22.0;
+    let chev = |cx: f32, dir: f32| {
+        v.p.add(Shape::line(vec![v.pt(cx - 4.0 * dir, cy - 7.0), v.pt(cx + 4.0 * dir, cy), v.pt(cx - 4.0 * dir, cy + 7.0)], st));
     };
-    p.text(Pos2::new(rect.center().x, rect.top() + 66.0), Align2::CENTER_TOP, def.id, FontId::proportional(11.0), th.text);
-    if !shown.is_empty() {
-        p.text(Pos2::new(rect.center().x, rect.top() + 79.0), Align2::CENTER_TOP, shown, FontId::proportional(11.0), th.bright);
+    chev(x + 20.0, -1.0);
+    chev(x + w - 20.0, 1.0);
+    if resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            return if pos.x < rect.center().x { -1 } else { 1 };
+        }
     }
-    resp.on_hover_text(def.name);
+    0
 }
 
-/// `< name >` selector for a whole-number parameter.
-fn step_selector(ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, i: usize, names: &[&str], th: &Theme) {
-    let cur = (unsafe { ptr.unmodulated_normalized_value() } * (PARAMS[i].hi - PARAMS[i].lo)).round() as i32;
-    let n = names.len() as i32;
-    ui.horizontal(|ui| {
-        if ui.button("<").clicked() { set_norm(setter, ptr, to_norm(i, ((cur - 1 + n) % n) as f32)); }
-        ui.add_sized([130.0, 22.0], egui::Label::new(egui::RichText::new(names[cur.clamp(0, n - 1) as usize]).color(th.bright).strong()));
-        if ui.button(">").clicked() { set_norm(setter, ptr, to_norm(i, ((cur + 1) % n) as f32)); }
-    });
+fn button(v: &View, ui: &mut egui::Ui, key: usize, x: f32, y: f32, w: f32, text: &str) -> bool {
+    let rect = v.rect(x, y, w, 44.0);
+    let resp = ui.interact(rect, ui.id().with(("button", key)), Sense::click());
+    v.outline(rect, 22.0, pill_fill(resp.hovered()), 3.0, CREAM);
+    v.text(x + w / 2.0, y + 22.0, Align2::CENTER_CENTER, text, v.bold(15.0), CREAM);
+    resp.clicked()
 }
 
-fn group_title(g: Group) -> &'static str {
-    match g {
-        Group::Env => "Envelope", Group::Vol => "Volume", Group::Mod => "Modulation", Group::Lfo => "LFO",
-        Group::OscA => "Oscillator A", Group::Fm => "FM", Group::Mix => "Mix", Group::OscB => "Oscillator B",
-        Group::Flt => "Filter", Group::Sat => "Saturation", Group::Rvb => "Reverb", Group::Adj => "Adjust", Group::Play => "Play",
+// ---- scopes -----------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum Scope {
+    OscA,
+    OscB,
+    Sat,
+    Rvb,
+}
+
+fn draw_scope(v: &View, params: &crate::params_gen::SeedParams, scope_kind: Scope, fx: f32, fy: f32, beats: f32) {
+    let (x, y, w, h) = (fx + 24.0, fy + 20.0, 268.0, 64.0);
+    v.outline(v.rect(x, y, w, h), 12.0, Color32::from_rgba_unmultiplied(3, 3, 22, 80), 1.5, Color32::from_white_alpha(110));
+    let val = |i: usize| unsafe { params.ptrs()[i].unmodulated_normalized_value() };
+    let mid = y + h / 2.0;
+    let amp = h / 2.0 - 8.0;
+    let n = 134usize;
+    let sx = |k: usize| x + 8.0 + (w - 16.0) * k as f32 / n as f32;
+    let strong = Stroke::new(2.0 * v.s, CREAM);
+    let faint = Stroke::new(1.0 * v.s, Color32::from_white_alpha(70));
+    let scroll = beats / 8.0;
+    match scope_kind {
+        Scope::OscA | Scope::OscB => {
+            let form = val(if matches!(scope_kind, Scope::OscA) { idx::A_FORM } else { idx::B_FORM });
+            let pts: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), mid - amp * scope::osc_y(2.0 * k as f32 / n as f32 - scroll * 2.0, form))).collect();
+            v.p.add(Shape::line(pts, strong));
+        }
+        Scope::Sat => {
+            let (drive, clip) = (val(idx::SATURATE), val(idx::ADJ_CLIP));
+            let mut a = Vec::new();
+            let mut b = Vec::new();
+            for k in 0..=n {
+                let (out, inp) = scope::sat_y(2.0 * k as f32 / n as f32 - scroll * 2.0, drive, clip);
+                a.push(v.pt(sx(k), mid - amp * inp));
+                b.push(v.pt(sx(k), mid - amp * out));
+            }
+            v.p.add(Shape::line(a, faint));
+            v.p.add(Shape::line(b, strong));
+        }
+        Scope::Rvb => {
+            let (len, size, atk, damp) = (val(idx::RVB_LEN), val(idx::RVB_SIZE), val(idx::RVB_ATK), val(idx::RVB_DAMP));
+            let env: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), mid - amp * scope::rvb_y(k as u32, len, size, atk, damp).1)).collect();
+            v.p.add(Shape::line(env, faint));
+            for k in 0..=n {
+                let (val, _) = scope::rvb_y(k as u32, len, size, atk, damp);
+                v.p.add(Shape::line_segment([v.pt(sx(k), mid - amp * val), v.pt(sx(k), mid + amp * val)], Stroke::new(1.6 * v.s, CREAM)));
+            }
+        }
     }
 }
 
-fn page_groups(page: usize) -> &'static [Group] {
-    match page {
-        0 => &[Group::Env, Group::Vol, Group::Mod, Group::Lfo],
-        1 => &[Group::OscA, Group::Fm, Group::Mix, Group::OscB, Group::Play],
-        _ => &[Group::Flt, Group::Sat, Group::Rvb, Group::Adj],
+// ---- layout -----------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+enum Kind {
+    /// four big knobs
+    L,
+    /// six medium knobs
+    S,
+    /// scope on top, up to six small knobs
+    W(Scope),
+    /// two big knobs and a reverb type pill
+    T,
+    /// glide, mono, source pill (and wavetable pill)
+    V,
+}
+
+struct Panel {
+    x: f32,
+    y: f32,
+    label: &'static str,
+    kind: Kind,
+    knobs: &'static [usize],
+}
+
+fn panels(view: usize) -> Vec<Panel> {
+    let (tl, tr, bl, br) = ((360.0, 40.0), (764.0, 40.0), (360.0, 422.0), (764.0, 422.0));
+    fn p(pos: (f32, f32), label: &'static str, kind: Kind, knobs: &'static [usize]) -> Panel {
+        Panel { x: pos.0, y: pos.1, label, kind, knobs }
+    }
+    match view {
+        0 => vec![
+            p(tl, "Envelope", Kind::L, &[idx::ENV_TIME, idx::ENV_LOOP, idx::ENV_TILT, idx::ENV_KF]),
+            p(tr, "Volume", Kind::L, &[idx::VOL_ATK, idx::VOL_DCY, idx::VOL_SUS, idx::VOL_FADE]),
+            p(bl, "Modulation", Kind::L, &[idx::MOD_ATK, idx::MOD_DCY, idx::MOD_SH, idx::MOD_VEL]),
+            p(br, "LFO", Kind::L, &[idx::LFO_RATE, idx::LFO_AMT, idx::LFO_BAL, idx::LFO_DLY]),
+        ],
+        1 => vec![
+            p(tl, "Oscillator A", Kind::W(Scope::OscA), &[idx::A_FORM, idx::A_NOISE, idx::A_MOD, idx::A_COLOR, idx::A_FREQ]),
+            p(tr, "Oscillator B", Kind::W(Scope::OscB), &[idx::B_FORM, idx::B_NOISE, idx::B_MOD, idx::SUB_AM, idx::B_FREQ, idx::B_SH]),
+            p(bl, "FM & Mix", Kind::L, &[idx::FM_MOD, idx::FM_AMT, idx::MIX_MOD, idx::OSC_MIX]),
+            p(br, "Voice", Kind::V, &[]),
+        ],
+        _ => vec![
+            p(tl, "Filter", Kind::S, &[idx::FLT_TYPE, idx::FLT_Q, idx::FLT_MOD, idx::FLT_SEP, idx::FLT_FREQ, idx::FLT_KF]),
+            p(tr, "Drive & Tone", Kind::W(Scope::Sat), &[idx::SATURATE, idx::ADJ_CLIP, idx::ADJ_BASS, idx::ADJ_TREB, idx::ADJ_PAN]),
+            p(bl, "Reverb", Kind::W(Scope::Rvb), &[idx::RVB_MIX, idx::RVB_ATK, idx::RVB_LEN, idx::RVB_SIZE]),
+            p(br, "Tail", Kind::T, &[idx::RVB_DAMP, idx::RVB_CHOR]),
+        ],
+    }
+}
+
+const L_SLOTS: [(f32, f32); 4] = [(90.0, 28.0), (234.0, 28.0), (90.0, 190.0), (234.0, 190.0)];
+const S_SLOTS: [(f32, f32); 6] = [(62.0, 26.0), (156.0, 26.0), (250.0, 26.0), (62.0, 150.0), (156.0, 150.0), (250.0, 150.0)];
+const W_SLOTS: [(f32, f32); 6] = [(62.0, 102.0), (156.0, 102.0), (250.0, 102.0), (62.0, 214.0), (156.0, 214.0), (250.0, 214.0)];
+const T_SLOTS: [(f32, f32); 2] = [(90.0, 40.0), (234.0, 40.0)];
+
+fn draw_panel(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, shared: &Shared, st: &mut UiState, pn: &Panel, key0: usize) {
+    let params = &shared.params;
+    let ptrs = params.ptrs();
+    let frame = v.rect(pn.x, pn.y, 380.0, 358.0);
+    v.outline(frame, 28.0, Color32::from_rgba_unmultiplied(3, 3, 22, 102), 4.0, CREAM);
+    v.vtext(pn.x + 380.0 - 20.0, pn.y + 179.0, pn.label, 30.0);
+
+    let (slots, d): (&[(f32, f32)], f32) = match pn.kind {
+        Kind::L => (&L_SLOTS, 118.0),
+        Kind::S => (&S_SLOTS, 84.0),
+        Kind::W(_) => (&W_SLOTS, 72.0),
+        Kind::T => (&T_SLOTS, 118.0),
+        Kind::V => (&[], 118.0),
+    };
+    if let Kind::W(sc) = pn.kind {
+        draw_scope(v, params, sc, pn.x, pn.y, st.beats);
+    }
+    for (n, &i) in pn.knobs.iter().enumerate() {
+        let Some(&(cx, top)) = slots.get(n) else { break };
+        knob(v, ui, setter, ptrs[i], key0 + n, to_norm(i, PARAMS[i].def), &short_label(PARAMS[i].id), pn.x + cx, pn.y + top, d);
+    }
+    match pn.kind {
+        Kind::T => {
+            let cur = (unsafe { ptrs[idx::RVB_TYPE].unmodulated_normalized_value() } * (PARAMS[idx::RVB_TYPE].hi - PARAMS[idx::RVB_TYPE].lo)).round() as i32;
+            let n = REVERB_NAMES.len() as i32;
+            let step = pill_select(v, ui, key0 + 20, pn.x + 24.0, pn.y + 240.0, 268.0, "REVERB", REVERB_NAMES[cur.clamp(0, n - 1) as usize]);
+            if step != 0 {
+                set_norm(setter, ptrs[idx::RVB_TYPE], to_norm(idx::RVB_TYPE, ((cur + step + n) % n) as f32));
+            }
+        }
+        Kind::V => {
+            knob(v, ui, setter, ptrs[idx::GLIDE], key0, to_norm(idx::GLIDE, PARAMS[idx::GLIDE].def), "GLIDE", pn.x + 90.0, pn.y + 40.0, 118.0);
+            toggle(v, ui, setter, ptrs[idx::MONO], key0 + 1, "MONO", params.mono.value(), pn.x + 234.0, pn.y + 40.0, 118.0);
+            let cur = (unsafe { ptrs[idx::SRC_TYPE].unmodulated_normalized_value() } * (PARAMS[idx::SRC_TYPE].hi - PARAMS[idx::SRC_TYPE].lo)).round() as i32;
+            let n = SOURCE_NAMES.len() as i32;
+            let step = pill_select(v, ui, key0 + 20, pn.x + 24.0, pn.y + 240.0, 268.0, "SOURCE", SOURCE_NAMES[cur.clamp(0, n - 1) as usize]);
+            if step != 0 {
+                set_norm(setter, ptrs[idx::SRC_TYPE], to_norm(idx::SRC_TYPE, ((cur + step + n) % n) as f32));
+            }
+            if params.src_type.value() == 1 {
+                let r = v.rect(pn.x + 24.0, pn.y + 296.0, 268.0, 44.0);
+                let resp = ui.interact(r, ui.id().with(("wt", key0)), Sense::click());
+                v.outline(r, 22.0, pill_fill(resp.hovered()), 3.0, CREAM);
+                v.text(pn.x + 158.0, pn.y + 318.0, Align2::CENTER_CENTER, "Wavetable...", v.it(17.0), CREAM);
+                if resp.clicked() { st.popup = Popup::Wavetables; }
+            }
+        }
+        _ => {}
     }
 }
 
 // ---- the window -------------------------------------------------------------------------------------------------
 
-fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiState, th: &Theme) {
+fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiState) {
     let params = &shared.params;
-    let ptrs = params.ptrs();
     let seed = params.seed.load(Ordering::Relaxed);
 
-    // header
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Seedling").size(24.0).color(th.bright).strong());
-        ui.label(egui::RichText::new(seed_title(seed)).color(th.dim));
-    });
-    ui.horizontal_wrapped(|ui| {
-        if ui.add(egui::Button::new(egui::RichText::new("Randomize").color(th.bright).strong()).fill(th.accent)).clicked() {
-            let s = FIRST_ARCHETYPE_SEED + (st.rng.next_u64() % SEED_RANGE as u64) as u32;
-            st.status = grow(setter, shared, s);
-        }
-        ui.label("seed");
-        let r = ui.add(egui::TextEdit::singleline(&mut st.seed_text).desired_width(80.0).hint_text(seed.to_string()));
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if ui.button("Grow").clicked() || enter {
-            match st.seed_text.trim().parse::<u32>() {
-                Ok(s) => st.status = grow(setter, shared, s),
-                Err(_) => st.status = "Type a whole number as the seed.".into(),
-            }
-        }
-        ui.separator();
-        ui.label("soft");
-        let mut chaos = params.chaos.value();
-        if ui.add(egui::Slider::new(&mut chaos, 0.0..=1.0).show_value(false)).changed() {
-            set_norm(setter, params.chaos.as_ptr(), chaos);
-        }
-        ui.label("wild");
-        let mut tune = params.auto_tune.value();
-        if ui.checkbox(&mut tune, "Auto tune").changed() {
-            set_norm(setter, params.auto_tune.as_ptr(), if tune { 1.0 } else { 0.0 });
-        }
-        if ui.button("Correct Tune").on_hover_text("Re-tune the oscillators so every key plays in tune").clicked() {
-            let mut v = params.values();
-            correct_tune(&mut v);
-            apply_values(setter, shared, &v);
-            st.status = "Tuned the oscillators to the keys.".into();
-        }
-    });
+    // clocks
+    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 0.1);
+    let bpm = f32::from_bits(shared.tempo.load(Ordering::Relaxed)).clamp(40.0, 300.0);
+    st.clock += dt;
+    st.grow_t += dt;
+    st.beats += dt * bpm / 60.0;
+    st.grain_timer += dt;
+    if st.grain_timer > 0.12 {
+        st.grain_timer = 0.0;
+        let h = ((st.clock * 997.0) as u32).wrapping_mul(2_654_435_761);
+        st.grain_shift = ((h & 0xFF) as f32 / 255.0, ((h >> 8) & 0xFF) as f32 / 255.0);
+    }
+    if st.grain.is_none() {
+        st.grain = Some(make_grain(ui.ctx()));
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 
-    // presets
-    ui.horizontal_wrapped(|ui| {
-        ui.menu_button("Presets", |ui| {
-            let files = storage::list_files(&storage::preset_dir(), "seedling");
-            if files.is_empty() { ui.label("(no presets saved yet)"); }
-            for f in files {
-                let name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                if ui.button(name).clicked() {
-                    match std::fs::read_to_string(&f).ok().and_then(|t| storage::preset_from_text(&t)) {
-                        Some(p) => {
-                            apply_values(setter, shared, &p.values);
-                            for i in 0..NUM_PARAMS {
-                                if PARAMS[i].flags & NO_RANDOM != 0 { set_norm(setter, ptrs[i], to_norm(i, p.values[i])); }
-                            }
-                            params.seed.store(p.seed, Ordering::Relaxed);
-                            match storage::table_from_text(&p.wavetable) {
-                                Some(t) => {
-                                    if let Ok(mut g) = params.wavetable.lock() { *g = p.wavetable.clone(); }
-                                    if let Ok(mut g) = params.wavetable_info.lock() { *g = p.wavetable_info.clone(); }
-                                    shared.slot.set(Some(Arc::new(t)));
-                                }
-                                None => clear_wavetable(shared),
-                            }
-                            st.status = format!("Loaded {}", f.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
-                        }
-                        None => st.status = "That preset could not be read.".into(),
-                    }
-                }
-            }
-            ui.separator();
-            if ui.button("Open presets folder").clicked() { storage::open_folder(&storage::preset_dir()); }
-        });
-        ui.menu_button("Skin", |ui| {
-            let current = params.skin.lock().map(|s| s.clone()).unwrap_or_default();
-            let current = if current.is_empty() { SEED_COLOURS.to_string() } else { current };
-            let mut pick: Option<String> = None;
-            if ui.selectable_label(current == SEED_COLOURS, SEED_COLOURS).on_hover_text("Colours that follow the patch seed").clicked() { pick = Some(SEED_COLOURS.into()); }
-            for s in &st.skins {
-                if ui.selectable_label(current == s.name, &s.name).clicked() { pick = Some(s.name.clone()); }
-            }
-            ui.separator();
-            if ui.button("Reload skins").clicked() {
-                let (list, problems) = skins::load_all();
-                st.skins = list;
-                st.status = if problems.is_empty() { format!("{} skins loaded.", st.skins.len()) } else { format!("Skin problem: {}", problems.join("; ")) };
-            }
-            if ui.button("Open skins folder").clicked() { storage::open_folder(&skins::skins_dir()); }
-            if let Some(name) = pick {
-                if let Ok(mut g) = params.skin.lock() { *g = name; }
-            }
-        });
-        ui.add(egui::TextEdit::singleline(&mut st.preset_name).desired_width(140.0));
-        if ui.button("Save").clicked() {
-            let preset = storage::Preset {
-                values: params.values().to_vec(),
-                seed,
-                wavetable: params.wavetable.lock().map(|s| s.clone()).unwrap_or_default(),
-                wavetable_info: params.wavetable_info.lock().map(|s| s.clone()).unwrap_or_default(),
-            };
-            let path = storage::preset_dir().join(format!("{}.seedling", storage::safe_file_stem(&st.preset_name)));
-            st.status = match std::fs::write(&path, storage::preset_to_text(&preset)) {
-                Ok(()) => format!("Saved {}", path.display()),
-                Err(e) => format!("Could not save: {e}"),
-            };
-        }
-    });
+    let full = ui.max_rect();
+    let s = (full.width() / W).min(full.height() / H).max(0.2);
+    let o = full.center() - Vec2::new(W, H) * s / 2.0;
+    let v = View { p: ui.painter().clone(), o, s };
 
-    ui.separator();
-    ui.horizontal(|ui| {
-        for (p, title) in PAGE_TITLES.iter().enumerate() {
-            let label = format!("{}  {}", ["I", "II", "III"][p], title);
-            if ui.selectable_label(st.page == p, egui::RichText::new(label).size(15.0)).clicked() {
-                st.page = p;
+    background(&v, full, st);
+
+    // the three page boxes, with the tree growing up through them from Filter & effects to Envelope & LFO
+    let titles = ["I · Envelope & LFO", "II · Oscillators", "III · Filter & effects"];
+    for (n, title) in titles.iter().enumerate() {
+        let y = 40.0 + 249.0 * n as f32;
+        let r = v.rect(36.0, y, 300.0, 241.0);
+        let resp = ui.interact(r, ui.id().with(("page", n)), Sense::click());
+        let active = st.view == n;
+        let fill = if active { Color32::from_white_alpha(33) } else if resp.hovered() { Color32::from_white_alpha(16) } else { Color32::TRANSPARENT };
+        v.outline(r, 28.0, fill, 4.0, CREAM);
+        v.text(60.0, y + 22.0, Align2::LEFT_TOP, title, v.it(22.0), CREAM);
+        if resp.clicked() {
+            st.view = n;
+            st.last_edit = n;
+        }
+    }
+    draw_tree(&v, &st.tree, tree::LEFT, st.grow_t, st.clock);
+
+    if st.view == 3 {
+        // home: the big tree inside an orbit that beats with the host tempo
+        let frame = v.rect(360.0, 40.0, 784.0, 740.0);
+        v.outline(frame, 28.0, Color32::from_rgba_unmultiplied(3, 3, 22, 102), 4.0, CREAM);
+        v.vtext(360.0 + 784.0 - 20.0, 40.0 + 370.0, "seedling", 30.0);
+        let (cx, cy) = (722.0, 565.0);
+        let ring = ellipse_pts(cx, cy, 300.0, 46.0, 96, &v);
+        v.p.add(Shape::line(ring.clone(), Stroke::new(1.0 * v.s, Color32::from_white_alpha(76))));
+        v.p.extend(Shape::dashed_line(&ring, Stroke::new(3.0 * v.s, Color32::from_white_alpha(180)), 1.0 * v.s, 30.0 * v.s));
+        let ang = st.beats / 32.0 * TAU;
+        v.p.circle_filled(v.pt(cx + 300.0 * ang.cos(), cy + 46.0 * ang.sin()), 5.0 * v.s, CREAM);
+        draw_tree(&v, &st.tree, tree::HERO, st.grow_t, st.clock);
+
+        // patch name, bands, status
+        let name_rect = v.rect(388.0, 56.0, 330.0, 40.0);
+        ui.put(
+            name_rect,
+            egui::TextEdit::singleline(&mut st.preset_name)
+                .frame(false)
+                .font(v.it(30.0))
+                .text_color(CREAM)
+                .desired_width(330.0 * v.s),
+        );
+        v.text(388.0, 100.0, Align2::LEFT_TOP, "I · ENVELOPE & LFO", v.bold(12.0), CREAM);
+        v.text(388.0, 336.0, Align2::LEFT_TOP, "II · OSCILLATORS", v.bold(12.0), CREAM);
+        v.text(388.0, 552.0, Align2::LEFT_TOP, "III · FILTER & EFFECTS", v.bold(12.0), CREAM);
+        let status = if st.status.is_empty() { seed_title(seed) } else { st.status.clone() };
+        v.text(388.0, 744.0, Align2::LEFT_TOP, &status, v.it(14.0), CREAM);
+
+        // randomness and tuning
+        let chaos_def = 0.5;
+        knob(&v, ui, setter, params.chaos.as_ptr(), 900, chaos_def, "SOFT · WILD", 1040.0, 90.0, 84.0);
+        toggle(&v, ui, setter, params.auto_tune.as_ptr(), 901, "AUTO TUNE", params.auto_tune.value(), 1040.0, 250.0, 84.0);
+    } else {
+        let list = panels(st.view);
+        for (n, pn) in list.iter().enumerate() {
+            draw_panel(&v, ui, setter, shared, st, pn, 100 * (n + 1));
+        }
+    }
+
+    // bottom row: seed, buttons, navigation
+    let seed_rect = v.rect(36.0, 806.0, 190.0, 44.0);
+    v.outline(seed_rect, 22.0, Color32::from_rgba_unmultiplied(3, 3, 22, 102), 3.0, CREAM);
+    v.text(58.0, 828.0, Align2::LEFT_CENTER, "SEED", v.bold(11.0), CREAM);
+    let seed_edit = ui.put(
+        v.rect(104.0, 812.0, 104.0, 32.0),
+        egui::TextEdit::singleline(&mut st.seed_text)
+            .frame(false)
+            .font(v.it(18.0))
+            .text_color(CREAM)
+            .hint_text(egui::RichText::new(seed.to_string()).color(Color32::from_white_alpha(170)))
+            .horizontal_align(Align::Center)
+            .desired_width(104.0 * v.s),
+    );
+    if seed_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        match st.seed_text.trim().parse::<u32>() {
+            Ok(n) => {
+                st.status = grow(setter, shared, n);
+                st.grow_t = 0.0;
+                st.seed_text.clear();
             }
+            Err(_) => st.status = "Type a whole number as the seed.".into(),
         }
-    });
-    ui.add_space(4.0);
+    }
+    if button(&v, ui, 1, 262.0, 806.0, 150.0, "Randomize") {
+        let n = FIRST_ARCHETYPE_SEED + (st.rng.next_u64() % SEED_RANGE as u64) as u32;
+        st.status = grow(setter, shared, n);
+        st.grow_t = 0.0;
+    }
+    if button(&v, ui, 2, 448.0, 806.0, 150.0, "Correct tune") {
+        let mut vals = params.values();
+        correct_tune(&mut vals);
+        apply_values(setter, shared, &vals);
+        st.status = "Tuned the oscillators to the keys.".into();
+    }
+    if button(&v, ui, 3, 634.0, 806.0, 150.0, "Save") {
+        let preset = storage::Preset {
+            values: params.values().to_vec(),
+            seed,
+            wavetable: params.wavetable.lock().map(|s| s.clone()).unwrap_or_default(),
+            wavetable_info: params.wavetable_info.lock().map(|s| s.clone()).unwrap_or_default(),
+        };
+        let path = storage::preset_dir().join(format!("{}.seedling", storage::safe_file_stem(&st.preset_name)));
+        st.status = match std::fs::write(&path, storage::preset_to_text(&preset)) {
+            Ok(()) => format!("Saved {}", path.display()),
+            Err(e) => format!("Could not save: {e}"),
+        };
+    }
+    if button(&v, ui, 4, 820.0, 806.0, 150.0, "Load") {
+        st.popup = Popup::Presets;
+    }
+    let (nav_label, nav_to) = if st.view == 3 { ("Edit sound", st.last_edit) } else { ("Home", 3) };
+    if button(&v, ui, 5, 1006.0, 806.0, 150.0, nav_label) {
+        st.view = nav_to;
+    }
 
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        for &g in page_groups(st.page) {
-            ui.group(|ui| {
-                ui.label(egui::RichText::new(group_title(g)).color(th.dim).size(12.0));
-                ui.horizontal_wrapped(|ui| {
-                    for (i, def) in PARAMS.iter().enumerate() {
-                        if def.group == g && def.page as usize == st.page && def.flags & (SWITCH | STEP) == 0 {
-                            knob(ui, setter, ptrs[i], i, th);
-                        }
-                    }
-                });
-                match g {
-                    Group::OscA => {
-                        ui.horizontal(|ui| {
-                            ui.label("Source");
-                            step_selector(ui, setter, ptrs[idx::SRC_TYPE], idx::SRC_TYPE, &SOURCE_NAMES, th);
-                        });
-                        if params.src_type.value() == 1 {
-                            wavetable_row(ui, shared, st, th);
-                        }
-                    }
-                    Group::Play => {
-                        let mut mono = params.mono.value();
-                        if ui.checkbox(&mut mono, "Mono (legato glide)").changed() {
-                            set_norm(setter, ptrs[idx::MONO], if mono { 1.0 } else { 0.0 });
-                        }
-                    }
-                    Group::Rvb => {
-                        ui.horizontal(|ui| {
-                            ui.label("Type");
-                            step_selector(ui, setter, ptrs[idx::RVB_TYPE], idx::RVB_TYPE, &REVERB_NAMES, th);
-                        });
-                    }
-                    _ => {}
-                }
-            });
-        }
-    });
-
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new(&st.status).color(th.dim).size(12.0));
+    grain_overlay(&v, full, st);
+    popups(ui, shared, setter, st);
 }
 
-fn wavetable_row(ui: &mut egui::Ui, shared: &Shared, st: &mut UiState, th: &Theme) {
-    let params = &shared.params;
-    ui.horizontal_wrapped(|ui| {
-        ui.menu_button("Wavetable...", |ui| {
-            let files = storage::list_files(&storage::wavetable_dir(), "wav");
-            if files.is_empty() { ui.label("Put WAV files in Documents/Seedling/Wavetables"); }
+fn popups(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiState) {
+    if st.popup == Popup::None {
+        return;
+    }
+    let ctx = ui.ctx().clone();
+    let mut close = false;
+    let mut picked: Option<std::path::PathBuf> = None;
+    let mut builtin = false;
+    let mut open_folder = false;
+    let wavetables = st.popup == Popup::Wavetables;
+    let (dir, ext, title) = if wavetables { (storage::wavetable_dir(), "wav", "Wavetables") } else { (storage::preset_dir(), "seedling", "Presets") };
+    egui::Window::new(title).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, Vec2::ZERO).show(&ctx, |ui| {
+        let files = storage::list_files(&dir, ext);
+        if files.is_empty() {
+            ui.label(if wavetables { "Put WAV files in Documents/Seedling/Wavetables" } else { "(no presets saved yet)" });
+        }
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for f in files {
                 let name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
                 if ui.button(name).clicked() {
-                    st.status = load_wavetable(shared, &f);
+                    picked = Some(f);
                 }
             }
-            ui.separator();
-            if ui.button("Open wavetable folder").clicked() { storage::open_folder(&storage::wavetable_dir()); }
-            if ui.button("Use built-in wavetable").clicked() {
-                clear_wavetable(shared);
-                st.status = "Using the built-in wavetable.".into();
-            }
         });
-        let info = params.wavetable_info.lock().map(|s| s.clone()).unwrap_or_default();
-        ui.label(egui::RichText::new(if info.is_empty() { "Built-in wavetable. Sampled sounds are pitch-detected and tuned to the keys.".to_string() } else { info }).color(th.dim).size(12.0));
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Open folder").clicked() { open_folder = true; }
+            if wavetables && ui.button("Use built-in wavetable").clicked() { builtin = true; }
+            if ui.button("Close").clicked() { close = true; }
+        });
+        if wavetables {
+            let info = shared.params.wavetable_info.lock().map(|s| s.clone()).unwrap_or_default();
+            ui.label(egui::RichText::new(if info.is_empty() { "Built-in wavetable. Sampled sounds are pitch-detected and tuned to the keys.".to_string() } else { info }).size(12.0));
+        }
     });
+    if open_folder { storage::open_folder(&dir); }
+    if builtin {
+        clear_wavetable(shared);
+        st.status = "Using the built-in wavetable.".into();
+        close = true;
+    }
+    if let Some(f) = picked {
+        st.status = if wavetables { load_wavetable(shared, &f) } else { load_preset(setter, shared, &f) };
+        if !wavetables { st.grow_t = 0.0; }
+        close = true;
+    }
+    if close { st.popup = Popup::None; }
 }

@@ -2,19 +2,25 @@
 
 mod editor;
 mod params_gen;
+#[allow(dead_code)]
 mod skins;
+mod scope;
+mod tree;
 mod storage;
 
 use nih_plug::prelude::*;
 use params_gen::SeedParams;
 use seedling_dsp::engine::{Engine, WavetableSlot};
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// State shared between the audio thread and the editor.
 pub struct Shared {
     pub params: Arc<SeedParams>,
     pub slot: WavetableSlot,
+    /// host tempo (f32 bits), written by the audio thread, read by the editor for tempo-synced animation
+    pub tempo: AtomicU32,
 }
 
 pub struct Seedling {
@@ -30,7 +36,7 @@ impl Default for Seedling {
         let slot = WavetableSlot::new();
         let mut engine = Engine::new(44100.0);
         engine.set_wavetable_slot(slot.clone());
-        Self { shared: Arc::new(Shared { params, slot }), engine, loaded_wavetable_len: 0 }
+        Self { shared: Arc::new(Shared { params, slot, tempo: AtomicU32::new(120.0f32.to_bits()) }), engine, loaded_wavetable_len: 0 }
     }
 }
 
@@ -95,6 +101,9 @@ impl Plugin for Seedling {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        if let Some(t) = context.transport().tempo {
+            self.shared.tempo.store((t as f32).to_bits(), Ordering::Relaxed);
+        }
         self.engine.set_params(&self.shared.params.values());
 
         let total = buffer.samples();

@@ -71,7 +71,7 @@ pub struct SeedParams {
 impl Default for SeedParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(900, 744),
+            editor_state: EguiState::from_size(1200, 900),
             seed: Arc::new(AtomicU32::new(0)),
             wavetable: Arc::new(Mutex::new(String::new())),
             wavetable_info: Arc::new(Mutex::new(String::new())),
