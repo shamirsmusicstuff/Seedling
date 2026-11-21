@@ -15,6 +15,14 @@ and egui. It builds **VST3** and **CLAP** on Windows, macOS and Linux. (nih-plug
 The generator is ported value for value: seeds grow the same patches as the C++ version (checked against the C++ generator
 on 60 patches in `dsp/src/randomizer.rs` tests).
 
+## Interface
+
+The window is drawn in a 1200 x 900 design space and scales with the host window. Home shows the growing tree; the three
+boxes on the left (Envelope & LFO at the top, Oscillators, Filter & effects at the bottom) open the edit pages, and
+**Edit sound** / **Home** in the bottom row switch between them. Knobs are circles that fill with their value: drag up
+and down, hold Shift for fine steps, double-click for the default. The seed box, Randomize, Correct tune, Save and Load
+sit in the bottom row. The waves, orbit and waveform previews follow the host tempo.
+
 ## Build
 
 ```
