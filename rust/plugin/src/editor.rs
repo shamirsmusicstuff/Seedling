@@ -1,5 +1,5 @@
 //! The egui editor. Everything is drawn with the painter in a 1200 x 900 design space that scales with the window:
-//! animated indigo waves and grain behind, the growing tree on the left running through the three page boxes, a big tree on
+//! animated indigo waves behind, the growing tree on the left running through the three page boxes, a big tree on
 //! the home page, level-fill circle knobs, selector pills and a row of buttons along the bottom.
 
 use crate::{scope, storage, tree, Shared};
@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use egui::epaint::{Mesh, TextShape};
-use egui::{Align, Align2, Color32, FontFamily, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, TextureHandle, Vec2};
+use egui::{Align, Align2, Color32, FontFamily, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Vec2};
 
 const W: f32 = 1200.0;
 const H: f32 = 900.0;
@@ -47,7 +47,6 @@ pub struct UiState {
     clock: f32,
     /// host-tempo clock in beats (waves, orbit and waveforms move with it)
     beats: f32,
-    grain: Option<TextureHandle>,
 }
 
 pub fn create(shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
@@ -65,7 +64,6 @@ pub fn create(shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
         grow_t: 0.0,
         clock: 0.0,
         beats: 0.0,
-        grain: None,
     };
     let window_state = egui_state.clone();
     create_egui_editor(
@@ -325,39 +323,6 @@ fn background(v: &View, full: Rect, st: &UiState) {
     shade.add_triangle(0, 1, 2);
     shade.add_triangle(0, 2, 3);
     p.add(Shape::mesh(shade));
-}
-
-fn make_grain(ctx: &egui::Context) -> TextureHandle {
-    let n = 256usize;
-    let mut state = 0x2545_F491_4F6C_DD1Du64;
-    let mut px = Vec::with_capacity(n * n * 4);
-    for _ in 0..n * n {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        let v = (state >> 24) as u8;
-        px.extend_from_slice(&[v, v, v, 11]);
-    }
-    let img = egui::ColorImage::from_rgba_unmultiplied([n, n], &px);
-    ctx.load_texture("seedling-grain", img, egui::TextureOptions::NEAREST)
-}
-
-fn grain_overlay(v: &View, full: Rect, st: &UiState) {
-    let Some(tex) = &st.grain else { return };
-    let tile = 256.0 / v.p.ctx().pixels_per_point();
-    let mut mesh = Mesh::with_texture(tex.id());
-    let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-    let (ox, oy) = (0.0, 0.0);
-    let mut y = full.top() - tile + oy;
-    while y < full.bottom() {
-        let mut x = full.left() - tile + ox;
-        while x < full.right() {
-            mesh.add_rect_with_uv(Rect::from_min_size(Pos2::new(x, y), Vec2::splat(tile)), uv, Color32::WHITE);
-            x += tile;
-        }
-        y += tile;
-    }
-    v.p.with_clip_rect(full).add(Shape::mesh(mesh));
 }
 
 fn ellipse_pts(cx: f32, cy: f32, rx: f32, ry: f32, n: usize, v: &View) -> Vec<Pos2> {
@@ -685,7 +650,7 @@ fn panels(view: usize) -> Vec<Panel> {
 const L_SLOTS: [(f32, f32); 4] = [(90.0, 28.0), (234.0, 28.0), (90.0, 190.0), (234.0, 190.0)];
 #[allow(dead_code)]
 const S_SLOTS: [(f32, f32); 6] = [(62.0, 26.0), (156.0, 26.0), (250.0, 26.0), (62.0, 150.0), (156.0, 150.0), (250.0, 150.0)];
-const W_SLOTS: [(f32, f32); 6] = [(62.0, 102.0), (156.0, 102.0), (250.0, 102.0), (62.0, 214.0), (156.0, 214.0), (250.0, 214.0)];
+const W_SLOTS: [(f32, f32); 6] = [(62.0, 96.0), (156.0, 96.0), (250.0, 96.0), (62.0, 220.0), (156.0, 220.0), (250.0, 220.0)];
 const T_SLOTS: [(f32, f32); 2] = [(90.0, 40.0), (234.0, 40.0)];
 
 fn draw_panel(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, shared: &Shared, st: &mut UiState, pn: &Panel, key0: usize) {
@@ -751,9 +716,6 @@ fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiSta
     st.clock += dt;
     st.grow_t += dt;
     st.beats += dt * bpm / 60.0;
-    if st.grain.is_none() {
-        st.grain = Some(make_grain(ui.ctx()));
-    }
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
 
     let full = ui.max_rect();
@@ -770,9 +732,11 @@ fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiSta
         let r = v.rect(36.0, y, 300.0, 241.0);
         let resp = ui.interact(r, ui.id().with(("page", n)), Sense::click());
         let active = st.view == n;
-        let fill = if active { Color32::from_white_alpha(33) } else if resp.hovered() { Color32::from_white_alpha(16) } else { Color32::TRANSPARENT };
+        let fill = if active { Color32::from_white_alpha(22) } else if resp.hovered() { Color32::from_white_alpha(16) } else { Color32::TRANSPARENT };
         v.outline(r, 28.0, fill, 4.0, CREAM);
-        v.text(60.0, y + 22.0, Align2::LEFT_TOP, title, v.it(22.0), CREAM);
+        let (num, name) = title.split_once(" · ").unwrap_or(("", title));
+        v.text(320.0, y + 16.0, Align2::RIGHT_TOP, num, v.bold(14.0), CREAM);
+        v.text(320.0, y + 36.0, Align2::RIGHT_TOP, name, v.it(20.0), CREAM);
         if resp.clicked() {
             st.view = n;
             st.last_edit = n;
@@ -876,7 +840,6 @@ fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiSta
         st.view = nav_to;
     }
 
-    grain_overlay(&v, full, st);
     popups(ui, shared, setter, st);
 }
 
