@@ -48,8 +48,6 @@ pub struct UiState {
     /// host-tempo clock in beats (waves, orbit and waveforms move with it)
     beats: f32,
     grain: Option<TextureHandle>,
-    grain_shift: (f32, f32),
-    grain_timer: f32,
 }
 
 pub fn create(shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
@@ -68,8 +66,6 @@ pub fn create(shared: Arc<Shared>) -> Option<Box<dyn Editor>> {
         clock: 0.0,
         beats: 0.0,
         grain: None,
-        grain_shift: (0.0, 0.0),
-        grain_timer: 0.0,
     };
     let window_state = egui_state.clone();
     create_egui_editor(
@@ -265,7 +261,10 @@ fn background(v: &View, full: Rect, st: &UiState) {
     v.p.rect_filled(full, 0.0, INK);
     let p = v.p.with_clip_rect(full);
 
-    // ridges: back to front
+    // ridges: back to front, reaching well past every edge of the window however it is resized
+    let dmin_x = (full.left() - v.o.x) / v.s;
+    let dmax_x = (full.right() - v.o.x) / v.s;
+    let dmax_y = (full.bottom() - v.o.y) / v.s;
     for i in 0..10usize {
         let fi = i as f32;
         let base = 250.0 + fi * 62.0;
@@ -279,13 +278,14 @@ fn background(v: &View, full: Rect, st: &UiState) {
         let bot_c = wave_grad(((fi + 1.0) / 9.0).min(1.0));
         let mut mesh = Mesh::default();
         let mut rim: Vec<Pos2> = Vec::new();
-        let steps = 64usize;
+        let (x0, x1) = (dmin_x - 500.0, dmax_x + 500.0);
+        let steps = (((x1 - x0) / 26.0) as usize).max(64);
         for k in 0..=steps {
-            let x = -250.0 + 1700.0 * k as f32 / steps as f32;
+            let x = x0 + (x1 - x0) * k as f32 / steps as f32;
             let a = TAU * x / period + phase - off;
             let y = base + amp * a.sin() + 0.3 * amp * (3.0 * a + 0.7).sin();
             let (tx, ty) = rotate_about(x, y);
-            let (bx, by) = rotate_about(x, base + amp + 420.0);
+            let (bx, by) = rotate_about(x, (base + amp + 420.0).max(dmax_y + 700.0));
             let top = v.pt(tx, ty);
             mesh.colored_vertex(top, top_c);
             mesh.colored_vertex(v.pt(bx, by), bot_c);
@@ -303,12 +303,12 @@ fn background(v: &View, full: Rect, st: &UiState) {
 
     // glow at the upper right
     let mut glow = Mesh::default();
-    let centre = v.pt(W * 0.86, H * 0.10);
+    let centre = Pos2::new(full.left() + full.width() * 0.86, full.top() + full.height() * 0.10);
     glow.colored_vertex(centre, Color32::from_rgba_unmultiplied(120, 104, 255, 90));
     let ring = 28u32;
     for k in 0..ring {
         let a = TAU * k as f32 / ring as f32;
-        glow.colored_vertex(centre + Vec2::new(a.cos(), a.sin()) * 520.0 * v.s, Color32::TRANSPARENT);
+        glow.colored_vertex(centre + Vec2::new(a.cos(), a.sin()) * full.width().max(full.height()) * 0.45, Color32::TRANSPARENT);
     }
     for k in 0..ring {
         glow.add_triangle(0, 1 + k, 1 + (k + 1) % ring);
@@ -317,7 +317,7 @@ fn background(v: &View, full: Rect, st: &UiState) {
 
     // shade on the left, behind the tree and boxes
     let mut shade = Mesh::default();
-    let (l, r) = (full.left(), v.pt(460.0, 0.0).x);
+    let (l, r) = (full.left(), full.left() + full.width() * 0.38);
     shade.colored_vertex(Pos2::new(l, full.top()), Color32::from_black_alpha(150));
     shade.colored_vertex(Pos2::new(r, full.top()), Color32::TRANSPARENT);
     shade.colored_vertex(Pos2::new(r, full.bottom()), Color32::TRANSPARENT);
@@ -328,7 +328,7 @@ fn background(v: &View, full: Rect, st: &UiState) {
 }
 
 fn make_grain(ctx: &egui::Context) -> TextureHandle {
-    let n = 128usize;
+    let n = 256usize;
     let mut state = 0x2545_F491_4F6C_DD1Du64;
     let mut px = Vec::with_capacity(n * n * 4);
     for _ in 0..n * n {
@@ -336,7 +336,7 @@ fn make_grain(ctx: &egui::Context) -> TextureHandle {
         state ^= state >> 7;
         state ^= state << 17;
         let v = (state >> 24) as u8;
-        px.extend_from_slice(&[v, v, v, 30]);
+        px.extend_from_slice(&[v, v, v, 11]);
     }
     let img = egui::ColorImage::from_rgba_unmultiplied([n, n], &px);
     ctx.load_texture("seedling-grain", img, egui::TextureOptions::NEAREST)
@@ -344,10 +344,10 @@ fn make_grain(ctx: &egui::Context) -> TextureHandle {
 
 fn grain_overlay(v: &View, full: Rect, st: &UiState) {
     let Some(tex) = &st.grain else { return };
-    let tile = 160.0 * v.s;
+    let tile = 256.0 / v.p.ctx().pixels_per_point();
     let mut mesh = Mesh::with_texture(tex.id());
     let uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-    let (ox, oy) = (st.grain_shift.0 * tile, st.grain_shift.1 * tile);
+    let (ox, oy) = (0.0, 0.0);
     let mut y = full.top() - tile + oy;
     while y < full.bottom() {
         let mut x = full.left() - tile + ox;
@@ -428,14 +428,23 @@ fn short_label(id: &str) -> String {
 
 /// A circle that fills from the bottom with the value. Drag up and down, shift for fine, double-click for the default.
 fn knob(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, key: usize, def_norm: f32, label: &str, cx: f32, top: f32, d: f32) {
-    let rect = v.rect(cx - d / 2.0 - 6.0, top, d + 12.0, d + 40.0);
-    let resp = ui.interact(rect, ui.id().with(("knob", key)), Sense::click_and_drag());
+    let rect = v.rect(cx - d / 2.0 - 6.0, top, d + 12.0, d + 44.0);
+    let id = ui.id().with(("knob", key));
+    let resp = ui.interact(rect, id, Sense::click_and_drag());
+    let drag_id = id.with("drag");
     let mut norm = unsafe { ptr.unmodulated_normalized_value() };
-    if resp.drag_started() { unsafe { setter.raw_context.raw_begin_set_parameter(ptr) }; }
+    if resp.drag_started() {
+        unsafe { setter.raw_context.raw_begin_set_parameter(ptr) };
+        ui.data_mut(|d| d.insert_temp(drag_id, norm));
+    }
     if resp.dragged() {
+        // the value is accumulated here in full precision, not read back from the host each frame
         let fine = ui.input(|i| i.modifiers.shift);
-        let dy = -resp.drag_delta().y / v.s * if fine { 0.0007 } else { 0.006 };
-        norm = (norm + dy).clamp(0.0, 1.0);
+        let rate = if fine { 0.0007 } else { 0.006 };
+        let cur: f32 = ui.data(|d| d.get_temp::<f32>(drag_id)).unwrap_or(norm);
+        let cur = (cur - resp.drag_delta().y / v.s * rate).clamp(0.0, 1.0);
+        ui.data_mut(|d| d.insert_temp(drag_id, cur));
+        norm = cur;
         unsafe { setter.raw_context.raw_set_parameter_normalized(ptr, norm) };
     }
     if resp.drag_stopped() { unsafe { setter.raw_context.raw_end_set_parameter(ptr) }; }
@@ -456,9 +465,9 @@ fn knob(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, key: u
         v.p.add(Shape::convex_polygon(pts, Color32::from_rgba_unmultiplied(205, 195, 255, if active { 150 } else { 115 }), Stroke::NONE));
     }
     v.p.circle_stroke(c, r, Stroke::new(if active { 5.0 } else { 4.0 } * v.s, CREAM));
-    v.text(cx, top + d + 7.0, Align2::CENTER_TOP, label, v.bold(12.0), CREAM);
+    v.text(cx, top + d + 10.0, Align2::CENTER_TOP, label, v.bold(12.0), CREAM);
     let shown = unsafe { ptr.normalized_value_to_string(norm, false) };
-    v.text(cx, top + d + 22.0, Align2::CENTER_TOP, &shown, v.it(13.0), CREAM);
+    v.text(cx, top + d + 26.0, Align2::CENTER_TOP, &shown, v.it(13.0), CREAM);
 }
 
 /// Round on/off switch drawn like a knob.
@@ -471,7 +480,7 @@ fn toggle(v: &View, ui: &mut egui::Ui, setter: &ParamSetter, ptr: ParamPtr, key:
     v.p.circle_filled(c, r, if on { Color32::from_rgba_unmultiplied(205, 195, 255, 150) } else { Color32::from_rgba_unmultiplied(3, 3, 22, 90) });
     v.p.circle_stroke(c, r, Stroke::new(if resp.hovered() { 5.0 } else { 4.0 } * v.s, CREAM));
     v.text(cx, top + d / 2.0 - 8.0, Align2::CENTER_TOP, if on { "ON" } else { "OFF" }, v.bold(15.0), CREAM);
-    v.text(cx, top + d + 7.0, Align2::CENTER_TOP, label, v.bold(12.0), CREAM);
+    v.text(cx, top + d + 10.0, Align2::CENTER_TOP, label, v.bold(12.0), CREAM);
 }
 
 fn pill_fill(hover: bool) -> Color32 {
@@ -516,51 +525,113 @@ enum Scope {
     OscB,
     Sat,
     Rvb,
+    Env,
+    Vol,
+    Mod,
+    Lfo,
+    Filter,
+    FmMix,
 }
 
-fn draw_scope(v: &View, params: &crate::params_gen::SeedParams, scope_kind: Scope, fx: f32, fy: f32, beats: f32) {
+fn draw_scope(v: &View, params: &crate::params_gen::SeedParams, kind: Scope, fx: f32, fy: f32, beats: f32) {
     let (x, y, w, h) = (fx + 24.0, fy + 20.0, 268.0, 64.0);
     v.outline(v.rect(x, y, w, h), 12.0, Color32::from_rgba_unmultiplied(3, 3, 22, 80), 1.5, Color32::from_white_alpha(110));
-    let val = |i: usize| unsafe { params.ptrs()[i].unmodulated_normalized_value() };
+    let ptrs = params.ptrs();
+    let val = |i: usize| unsafe { ptrs[i].unmodulated_normalized_value() };
     let mid = y + h / 2.0;
     let amp = h / 2.0 - 8.0;
+    let base = y + h - 8.0;
     let n = 134usize;
     let sx = |k: usize| x + 8.0 + (w - 16.0) * k as f32 / n as f32;
+    let frac = |k: usize| k as f32 / n as f32;
     let strong = Stroke::new(2.0 * v.s, CREAM);
     let faint = Stroke::new(1.0 * v.s, Color32::from_white_alpha(70));
     let scroll = beats / 8.0;
-    match scope_kind {
+    // a curve over 0..1 drawn from the baseline up, with a marker sweeping along it in time with the tempo
+    let unipolar = |f: &dyn Fn(f32) -> f32, marker: bool| {
+        let pts: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), base - 2.0 * amp * f(frac(k)))).collect();
+        v.p.add(Shape::line(pts, strong));
+        if marker {
+            let m = scroll.fract();
+            v.p.circle_filled(v.pt(x + 8.0 + (w - 16.0) * m, base - 2.0 * amp * f(m)), 3.5 * v.s, CREAM);
+        }
+    };
+    match kind {
         Scope::OscA | Scope::OscB => {
-            let form = val(if matches!(scope_kind, Scope::OscA) { idx::A_FORM } else { idx::B_FORM });
-            let pts: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), mid - amp * scope::osc_y(2.0 * k as f32 / n as f32 - scroll * 2.0, form))).collect();
+            let form = val(if matches!(kind, Scope::OscA) { idx::A_FORM } else { idx::B_FORM });
+            let pts: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), mid - amp * scope::osc_y(2.0 * frac(k) - scroll * 2.0, form))).collect();
             v.p.add(Shape::line(pts, strong));
         }
         Scope::Sat => {
+            // left and right channels: the pan control shifts level between them
             let (drive, clip) = (val(idx::SATURATE), val(idx::ADJ_CLIP));
-            let mut a = Vec::new();
-            let mut b = Vec::new();
+            let pan = val(idx::ADJ_PAN) * 2.0 - 1.0;
+            let (gl, gr) = ((1.0 - pan).min(1.0), (1.0 + pan).min(1.0));
+            let (mut inp, mut left, mut right) = (Vec::new(), Vec::new(), Vec::new());
             for k in 0..=n {
-                let (out, inp) = scope::sat_y(2.0 * k as f32 / n as f32 - scroll * 2.0, drive, clip);
-                a.push(v.pt(sx(k), mid - amp * inp));
-                b.push(v.pt(sx(k), mid - amp * out));
+                let (out, i) = scope::sat_y(2.0 * frac(k) - scroll * 2.0, drive, clip);
+                inp.push(v.pt(sx(k), mid - amp * i));
+                left.push(v.pt(sx(k), mid - amp * out * gl));
+                right.push(v.pt(sx(k), mid - amp * out * gr));
             }
-            v.p.add(Shape::line(a, faint));
-            v.p.add(Shape::line(b, strong));
+            v.p.add(Shape::line(inp, faint));
+            v.p.add(Shape::line(left, strong));
+            v.p.extend(Shape::dashed_line(&right, Stroke::new(1.8 * v.s, Color32::from_rgb(190, 170, 255)), 5.0 * v.s, 3.0 * v.s));
+            v.text(x + 14.0, y + 5.0, Align2::LEFT_TOP, "L", v.bold(10.0), CREAM);
+            v.text(x + w - 14.0, y + 5.0, Align2::RIGHT_TOP, "R", v.bold(10.0), Color32::from_rgb(190, 170, 255));
         }
         Scope::Rvb => {
             let (len, size, atk, damp) = (val(idx::RVB_LEN), val(idx::RVB_SIZE), val(idx::RVB_ATK), val(idx::RVB_DAMP));
             let env: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), mid - amp * scope::rvb_y(k as u32, len, size, atk, damp).1)).collect();
             v.p.add(Shape::line(env, faint));
             for k in 0..=n {
-                let (val, _) = scope::rvb_y(k as u32, len, size, atk, damp);
-                v.p.add(Shape::line_segment([v.pt(sx(k), mid - amp * val), v.pt(sx(k), mid + amp * val)], Stroke::new(1.6 * v.s, CREAM)));
+                let (tail, _) = scope::rvb_y(k as u32, len, size, atk, damp);
+                v.p.add(Shape::line_segment([v.pt(sx(k), mid - amp * tail), v.pt(sx(k), mid + amp * tail)], Stroke::new(1.6 * v.s, CREAM)));
             }
+        }
+        Scope::Env => {
+            let (t, l, ti) = (val(idx::ENV_TIME), val(idx::ENV_LOOP), val(idx::ENV_TILT));
+            unipolar(&|u| scope::env_y(u, t, l, ti), true);
+        }
+        Scope::Vol => {
+            let (a, d, s, f) = (val(idx::VOL_ATK), val(idx::VOL_DCY), val(idx::VOL_SUS), val(idx::VOL_FADE));
+            unipolar(&|u| scope::adsr_y(u, a, d, s, f), true);
+        }
+        Scope::Mod => {
+            let (a, d, sh, ve) = (val(idx::MOD_ATK), val(idx::MOD_DCY), val(idx::MOD_SH), val(idx::MOD_VEL));
+            unipolar(&|u| scope::mod_y(u, a, d, sh, ve), true);
+        }
+        Scope::Lfo => {
+            let (r, a, d) = (val(idx::LFO_RATE), val(idx::LFO_AMT), val(idx::LFO_DLY));
+            v.p.add(Shape::line_segment([v.pt(x + 8.0, mid), v.pt(x + w - 8.0, mid)], faint));
+            let pts: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), mid - amp * scope::lfo_y(frac(k), r, a, d))).collect();
+            v.p.add(Shape::line(pts, strong));
+        }
+        Scope::Filter => {
+            let (t, c, q) = (val(idx::FLT_TYPE), val(idx::FLT_FREQ), val(idx::FLT_Q));
+            let fill: Vec<Pos2> = (0..=n).map(|k| v.pt(sx(k), base - 2.0 * amp * scope::filter_y(frac(k), t, c, q))).collect();
+            v.p.add(Shape::line(fill, strong));
+            v.p.add(Shape::line_segment([v.pt(x + 8.0 + (w - 16.0) * c, y + 6.0), v.pt(x + 8.0 + (w - 16.0) * c, y + h - 6.0)], faint));
+        }
+        Scope::FmMix => {
+            // oscillator A phase-modulated by B, crossfaded with B by the mix control
+            let (fa, fb, mix, fm) = (val(idx::A_FORM), val(idx::B_FORM), val(idx::OSC_MIX), val(idx::FM_AMT));
+            let pts: Vec<Pos2> = (0..=n)
+                .map(|k| {
+                    let t = 2.0 * frac(k) - scroll * 2.0;
+                    let b = scope::osc_y(t * 3.0, fb);
+                    let a = scope::osc_y(t + 0.25 * fm * b, fa);
+                    v.pt(sx(k), mid - amp * (a * (1.0 - mix) + b * mix))
+                })
+                .collect();
+            v.p.add(Shape::line(pts, strong));
         }
     }
 }
 
 // ---- layout -----------------------------------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 enum Kind {
     /// four big knobs
@@ -590,19 +661,19 @@ fn panels(view: usize) -> Vec<Panel> {
     }
     match view {
         0 => vec![
-            p(tl, "Envelope", Kind::L, &[idx::ENV_TIME, idx::ENV_LOOP, idx::ENV_TILT, idx::ENV_KF]),
-            p(tr, "Volume", Kind::L, &[idx::VOL_ATK, idx::VOL_DCY, idx::VOL_SUS, idx::VOL_FADE]),
-            p(bl, "Modulation", Kind::L, &[idx::MOD_ATK, idx::MOD_DCY, idx::MOD_SH, idx::MOD_VEL]),
-            p(br, "LFO", Kind::L, &[idx::LFO_RATE, idx::LFO_AMT, idx::LFO_BAL, idx::LFO_DLY]),
+            p(tl, "Envelope", Kind::W(Scope::Env), &[idx::ENV_TIME, idx::ENV_LOOP, idx::ENV_TILT, idx::ENV_KF]),
+            p(tr, "Volume", Kind::W(Scope::Vol), &[idx::VOL_ATK, idx::VOL_DCY, idx::VOL_SUS, idx::VOL_FADE]),
+            p(bl, "Modulation", Kind::W(Scope::Mod), &[idx::MOD_ATK, idx::MOD_DCY, idx::MOD_SH, idx::MOD_VEL]),
+            p(br, "LFO", Kind::W(Scope::Lfo), &[idx::LFO_RATE, idx::LFO_AMT, idx::LFO_BAL, idx::LFO_DLY]),
         ],
         1 => vec![
             p(tl, "Oscillator A", Kind::W(Scope::OscA), &[idx::A_FORM, idx::A_NOISE, idx::A_MOD, idx::A_COLOR, idx::A_FREQ]),
             p(tr, "Oscillator B", Kind::W(Scope::OscB), &[idx::B_FORM, idx::B_NOISE, idx::B_MOD, idx::SUB_AM, idx::B_FREQ, idx::B_SH]),
-            p(bl, "FM & Mix", Kind::L, &[idx::FM_MOD, idx::FM_AMT, idx::MIX_MOD, idx::OSC_MIX]),
+            p(bl, "FM & Mix", Kind::W(Scope::FmMix), &[idx::FM_MOD, idx::FM_AMT, idx::MIX_MOD, idx::OSC_MIX]),
             p(br, "Voice", Kind::V, &[]),
         ],
         _ => vec![
-            p(tl, "Filter", Kind::S, &[idx::FLT_TYPE, idx::FLT_Q, idx::FLT_MOD, idx::FLT_SEP, idx::FLT_FREQ, idx::FLT_KF]),
+            p(tl, "Filter", Kind::W(Scope::Filter), &[idx::FLT_TYPE, idx::FLT_FREQ, idx::FLT_Q, idx::FLT_MOD, idx::FLT_SEP, idx::FLT_KF]),
             p(tr, "Drive & Tone", Kind::W(Scope::Sat), &[idx::SATURATE, idx::ADJ_CLIP, idx::ADJ_BASS, idx::ADJ_TREB, idx::ADJ_PAN]),
             p(bl, "Reverb", Kind::W(Scope::Rvb), &[idx::RVB_MIX, idx::RVB_ATK, idx::RVB_LEN, idx::RVB_SIZE]),
             p(br, "Tail", Kind::T, &[idx::RVB_DAMP, idx::RVB_CHOR]),
@@ -610,7 +681,9 @@ fn panels(view: usize) -> Vec<Panel> {
     }
 }
 
+#[allow(dead_code)]
 const L_SLOTS: [(f32, f32); 4] = [(90.0, 28.0), (234.0, 28.0), (90.0, 190.0), (234.0, 190.0)];
+#[allow(dead_code)]
 const S_SLOTS: [(f32, f32); 6] = [(62.0, 26.0), (156.0, 26.0), (250.0, 26.0), (62.0, 150.0), (156.0, 150.0), (250.0, 150.0)];
 const W_SLOTS: [(f32, f32); 6] = [(62.0, 102.0), (156.0, 102.0), (250.0, 102.0), (62.0, 214.0), (156.0, 214.0), (250.0, 214.0)];
 const T_SLOTS: [(f32, f32); 2] = [(90.0, 40.0), (234.0, 40.0)];
@@ -678,12 +751,6 @@ fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiSta
     st.clock += dt;
     st.grow_t += dt;
     st.beats += dt * bpm / 60.0;
-    st.grain_timer += dt;
-    if st.grain_timer > 0.12 {
-        st.grain_timer = 0.0;
-        let h = ((st.clock * 997.0) as u32).wrapping_mul(2_654_435_761);
-        st.grain_shift = ((h & 0xFF) as f32 / 255.0, ((h >> 8) & 0xFF) as f32 / 255.0);
-    }
     if st.grain.is_none() {
         st.grain = Some(make_grain(ui.ctx()));
     }
