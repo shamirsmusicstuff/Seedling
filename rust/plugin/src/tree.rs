@@ -48,7 +48,7 @@ pub struct Map {
 /// The tree beside the three page boxes (stretched tall so it runs through all of them). Window coordinates (1200 x 900 design space).
 pub const LEFT: Map = Map { ox: 186.0, oy: 614.0, sx: 1.0, sy: 2.2, k: 1.7 };
 /// The big tree on the home page (window coordinates).
-pub const HERO: Map = Map { ox: 722.0, oy: 565.0, sx: 2.05, sy: 2.05, k: 2.1 };
+pub const HERO: Map = Map { ox: 600.0, oy: 565.0, sx: 2.05, sy: 2.05, k: 2.1 };
 
 impl Map {
     pub fn pt(&self, p: (f32, f32)) -> (f32, f32) {

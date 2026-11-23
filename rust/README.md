@@ -17,11 +17,16 @@ on 60 patches in `dsp/src/randomizer.rs` tests).
 
 ## Interface
 
-The window is drawn in a 1200 x 900 design space and scales with the host window. Home shows the growing tree; the three
-boxes on the left (Envelope & LFO at the top, Oscillators, Filter & effects at the bottom) open the edit pages, and
+The window is drawn in a 1200 x 900 design space and scales with the host window. Home is just the big centred tree; the three
+boxes on the left (edit pages only) (Envelope & LFO at the top, Oscillators, Filter & effects at the bottom) open the edit pages, and
 **Edit sound** / **Home** in the bottom row switch between them. Knobs are circles that fill with their value: drag up
 and down, hold Shift for fine steps, double-click for the default. The seed box, Randomize, Correct tune, Save and Load
 sit in the bottom row. The waves, orbit and waveform previews follow the host tempo.
+
+### Design rule
+
+Only one tree is on screen at a time. The edit pages show the tree on the left, running through the three page boxes.
+Home shows nothing but the big centred tree (plus the bottom row of buttons).
 
 ## Build
 

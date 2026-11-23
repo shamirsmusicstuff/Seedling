@@ -725,31 +725,31 @@ fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiSta
 
     background(&v, full, st);
 
-    // the three page boxes, with the tree growing up through them from Filter & effects to Envelope & LFO
-    let titles = ["I · Envelope & LFO", "II · Oscillators", "III · Filter & effects"];
-    for (n, title) in titles.iter().enumerate() {
-        let y = 40.0 + 249.0 * n as f32;
-        let r = v.rect(36.0, y, 300.0, 241.0);
-        let resp = ui.interact(r, ui.id().with(("page", n)), Sense::click());
-        let active = st.view == n;
-        let fill = if active { Color32::from_white_alpha(22) } else if resp.hovered() { Color32::from_white_alpha(16) } else { Color32::TRANSPARENT };
-        v.outline(r, 28.0, fill, 4.0, CREAM);
-        let (num, name) = title.split_once(" · ").unwrap_or(("", title));
-        v.text(320.0, y + 16.0, Align2::RIGHT_TOP, num, v.bold(14.0), CREAM);
-        v.text(320.0, y + 36.0, Align2::RIGHT_TOP, name, v.it(20.0), CREAM);
-        if resp.clicked() {
-            st.view = n;
-            st.last_edit = n;
+    // Rule: only one tree on screen at a time. Edit pages show the tree on the left running through the three page
+    // boxes; Home shows nothing but the big centred tree.
+    if st.view != 3 {
+        let titles = ["I · Envelope & LFO", "II · Oscillators", "III · Filter & effects"];
+        for (n, title) in titles.iter().enumerate() {
+            let y = 40.0 + 249.0 * n as f32;
+            let r = v.rect(36.0, y, 300.0, 241.0);
+            let resp = ui.interact(r, ui.id().with(("page", n)), Sense::click());
+            let active = st.view == n;
+            let fill = if active { Color32::from_white_alpha(22) } else if resp.hovered() { Color32::from_white_alpha(16) } else { Color32::TRANSPARENT };
+            v.outline(r, 28.0, fill, 4.0, CREAM);
+            let (num, name) = title.split_once(" · ").unwrap_or(("", title));
+            v.text(320.0, y + 16.0, Align2::RIGHT_TOP, num, v.bold(14.0), CREAM);
+            v.text(320.0, y + 36.0, Align2::RIGHT_TOP, name, v.it(20.0), CREAM);
+            if resp.clicked() {
+                st.view = n;
+                st.last_edit = n;
+            }
         }
+        draw_tree(&v, &st.tree, tree::LEFT, st.grow_t, st.clock);
     }
-    draw_tree(&v, &st.tree, tree::LEFT, st.grow_t, st.clock);
 
     if st.view == 3 {
         // home: the big tree inside an orbit that beats with the host tempo
-        let frame = v.rect(360.0, 40.0, 784.0, 740.0);
-        v.outline(frame, 28.0, Color32::from_rgba_unmultiplied(3, 3, 22, 102), 4.0, CREAM);
-        v.vtext(360.0 + 784.0 - 20.0, 40.0 + 370.0, "seedling", 30.0);
-        let (cx, cy) = (722.0, 565.0);
+        let (cx, cy) = (600.0, 565.0);
         let ring = ellipse_pts(cx, cy, 300.0, 46.0, 96, &v);
         v.p.add(Shape::line(ring.clone(), Stroke::new(1.0 * v.s, Color32::from_white_alpha(76))));
         v.p.extend(Shape::dashed_line(&ring, Stroke::new(3.0 * v.s, Color32::from_white_alpha(180)), 1.0 * v.s, 30.0 * v.s));
@@ -758,20 +758,18 @@ fn draw(ui: &mut egui::Ui, shared: &Shared, setter: &ParamSetter, st: &mut UiSta
         draw_tree(&v, &st.tree, tree::HERO, st.grow_t, st.clock);
 
         // patch name, bands, status
-        let name_rect = v.rect(388.0, 56.0, 330.0, 40.0);
+        let name_rect = v.rect(300.0, 56.0, 600.0, 40.0);
         ui.put(
             name_rect,
             egui::TextEdit::singleline(&mut st.preset_name)
                 .frame(false)
                 .font(v.it(30.0))
                 .text_color(CREAM)
-                .desired_width(330.0 * v.s),
+                .horizontal_align(Align::Center)
+                .desired_width(600.0 * v.s),
         );
-        v.text(388.0, 100.0, Align2::LEFT_TOP, "I · ENVELOPE & LFO", v.bold(12.0), CREAM);
-        v.text(388.0, 336.0, Align2::LEFT_TOP, "II · OSCILLATORS", v.bold(12.0), CREAM);
-        v.text(388.0, 552.0, Align2::LEFT_TOP, "III · FILTER & EFFECTS", v.bold(12.0), CREAM);
         let status = if st.status.is_empty() { seed_title(seed) } else { st.status.clone() };
-        v.text(388.0, 744.0, Align2::LEFT_TOP, &status, v.it(14.0), CREAM);
+        v.text(600.0, 744.0, Align2::CENTER_TOP, &status, v.it(14.0), CREAM);
 
         // randomness and tuning
         let chaos_def = 0.5;
