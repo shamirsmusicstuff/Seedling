@@ -21,6 +21,8 @@ pub struct Shared {
     pub slot: WavetableSlot,
     /// host tempo (f32 bits), written by the audio thread, read by the editor for tempo-synced animation
     pub tempo: AtomicU32,
+    /// loudness of the output (f32 bits, 0..1), written by the audio thread; the editor turns it into wind in the tree
+    pub level: AtomicU32,
 }
 
 pub struct Seedling {
@@ -36,7 +38,7 @@ impl Default for Seedling {
         let slot = WavetableSlot::new();
         let mut engine = Engine::new(44100.0);
         engine.set_wavetable_slot(slot.clone());
-        Self { shared: Arc::new(Shared { params, slot, tempo: AtomicU32::new(120.0f32.to_bits()) }), engine, loaded_wavetable_len: 0 }
+        Self { shared: Arc::new(Shared { params, slot, tempo: AtomicU32::new(120.0f32.to_bits()), level: AtomicU32::new(0) }), engine, loaded_wavetable_len: 0 }
     }
 }
 
@@ -143,6 +145,11 @@ impl Plugin for Seedling {
             self.engine.render(&mut left[pos..end], &mut right[pos..end]);
             pos = end;
         }
+        // output loudness for the tree's wind: the block peak, falling away slowly so the editor never misses a note
+        let peak = left.iter().chain(right.iter()).fold(0.0f32, |m, x| m.max(x.abs()));
+        let before = f32::from_bits(self.shared.level.load(Ordering::Relaxed));
+        let level = if peak.is_finite() { peak.max(before * 0.92).min(0.999) } else { before };
+        self.shared.level.store(level.to_bits(), Ordering::Relaxed);
         ProcessStatus::KeepAlive
     }
 }

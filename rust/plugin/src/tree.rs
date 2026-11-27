@@ -17,12 +17,20 @@ pub struct Branch {
     pub opacity: f32,
     pub delay: f32,
     pub dur: f32,
+    /// 0 roots, 1 trunk, 2..4 limbs, 5 twigs
+    pub tier: u8,
+    /// the branch whose end this one grows from (None for the trunk and the first roots, which grow from the seed)
+    pub parent: Option<usize>,
+    /// the knob number whose value sets this limb's length (see `OWN_COUNT`)
+    pub own: Option<usize>,
 }
 
 /// A dot at the free end of a limb or root (an end no other branch starts from).
 #[derive(Clone, Copy, Debug)]
 pub struct Tip {
     pub at: (f32, f32),
+    /// the branch that ends here (its posed end is where the dot sits when the tree sways)
+    pub branch: usize,
     /// time (seconds) when the branch reaching it has finished growing
     pub done: f32,
     pub lit: bool,
@@ -32,7 +40,12 @@ pub struct Tip {
 pub struct Tree {
     pub branches: Vec<Branch>,
     pub tips: Vec<Tip>,
+    /// branch index of the limb each knob owns (knob number -> branch)
+    pub own_branch: Vec<usize>,
 }
+
+/// How many knobs own a limb each. Twigs first, then the third-level limbs, then the second-level ones.
+pub const OWN_COUNT: usize = 49;
 
 /// Maps tree space (the original 900-wide drawing) to window space: `x' = ox + sx (x - 450)`, `y' = oy + sy (y - 332)`.
 #[derive(Clone, Copy, Debug)]
@@ -91,25 +104,45 @@ impl Tree {
     pub fn build() -> Tree {
         let mut branches = Vec::new();
         let mut raw: Vec<((f32, f32), (f32, f32), f32)> = Vec::new(); // start, end, done
-        for (s, w, op, t0, st, dur) in TIERS {
+        let key = |p: (f32, f32)| ((p.0 * 10.0).round() as i32, (p.1 * 10.0).round() as i32);
+        let mut ends: std::collections::HashMap<(i32, i32), usize> = std::collections::HashMap::new();
+        // (tier, index within tier) of every limb a knob can own, in knob order: twigs, then third-level, then second-level limbs
+        let mut pool: Vec<(u8, usize)> = Vec::new();
+        for tier in [5u8, 4, 3] {
+            let n = TIERS[tier as usize].0.split(" M").count();
+            for i in 0..n {
+                if tier == 3 && i == n - 1 {
+                    continue; // the last second-level limb stays unowned, which makes the pool exactly OWN_COUNT
+                }
+                pool.push((tier, i));
+            }
+        }
+        let mut own_branch = vec![usize::MAX; OWN_COUNT];
+        for (ti, (s, w, op, t0, st, dur)) in TIERS.iter().enumerate() {
             for (i, seg) in s.split(" M").enumerate() {
                 let n = numbers(seg);
                 if n.len() < 6 {
                     continue;
                 }
                 let delay = t0 + i as f32 * st;
-                branches.push(Branch { p0: (n[0], n[1]), c: (n[2], n[3]), p1: (n[4], n[5]), width: w, opacity: op, delay, dur });
+                let idx = branches.len();
+                let parent = ends.get(&key((n[0], n[1]))).copied();
+                let own = pool.iter().position(|&(t, j)| t as usize == ti && j == i).filter(|&o| o < OWN_COUNT);
+                if let Some(o) = own {
+                    own_branch[o] = idx;
+                }
+                branches.push(Branch { p0: (n[0], n[1]), c: (n[2], n[3]), p1: (n[4], n[5]), width: *w, opacity: *op, delay, dur: *dur, tier: ti as u8, parent, own });
+                ends.insert(key((n[4], n[5])), idx);
                 raw.push(((n[0], n[1]), (n[4], n[5]), delay + dur));
             }
         }
-        let key = |p: (f32, f32)| ((p.0 * 10.0).round() as i32, (p.1 * 10.0).round() as i32);
         let starts: std::collections::HashSet<(i32, i32)> = raw.iter().map(|r| key(r.0)).collect();
         let mut seen = std::collections::HashSet::new();
         let mut tips: Vec<Tip> = Vec::new();
-        for r in &raw {
+        for (bi, r) in raw.iter().enumerate() {
             let k = key(r.1);
             if !starts.contains(&k) && seen.insert(k) {
-                tips.push(Tip { at: r.1, done: r.2, lit: false, twinkle: 0.0 });
+                tips.push(Tip { at: r.1, branch: bi, done: r.2, lit: false, twinkle: 0.0 });
             }
         }
         if !tips.is_empty() {
@@ -138,8 +171,62 @@ impl Tree {
                 }
             }
         }
-        Tree { branches, tips }
+        Tree { branches, tips, own_branch }
     }
+
+    /// The tree as it stands right now: every limb scaled by its knob's length factor and bent by the wind.
+    pub fn pose(&self, p: &Pose) -> Posed {
+        let mut curves: Vec<[(f32, f32); 3]> = Vec::with_capacity(self.branches.len());
+        let mut rot: Vec<f32> = Vec::with_capacity(self.branches.len());
+        for b in &self.branches {
+            let (s0, r0) = match b.parent {
+                Some(j) => (curves[j][2], rot[j]),
+                None => (b.p0, 0.0),
+            };
+            let f = b.own.and_then(|o| p.lens.get(o).copied()).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(1.0);
+            let theta = r0 + sway(b.tier, s0, p);
+            rot.push(theta);
+            let (sn, cs) = theta.sin_cos();
+            let turn = |v: (f32, f32)| (f * (v.0 * cs - v.1 * sn), f * (v.0 * sn + v.1 * cs));
+            let c = turn((b.c.0 - b.p0.0, b.c.1 - b.p0.1));
+            let e = turn((b.p1.0 - b.p0.0, b.p1.1 - b.p0.1));
+            curves.push([s0, (s0.0 + c.0, s0.1 + c.1), (s0.0 + e.0, s0.1 + e.1)]);
+        }
+        Posed { curves }
+    }
+}
+
+/// What the tree is doing: knob length factors (1 = as drawn) and the wind.
+pub struct Pose<'a> {
+    pub lens: &'a [f32],
+    /// 0 = still, 1 = full gale
+    pub wind: f32,
+    /// radians, advances with time (faster in stronger wind)
+    pub phase: f32,
+}
+
+/// Branch curves (start, control, end in tree space) after `Tree::pose`.
+pub struct Posed {
+    pub curves: Vec<[(f32, f32); 3]>,
+}
+
+impl Posed {
+    pub fn tip(&self, tree: &Tree, i: usize) -> (f32, f32) {
+        self.curves[tree.tips[i].branch][2]
+    }
+}
+
+/// Extra bend (radians) a limb of `tier` adds on top of its parent's, starting at `s0`. It leans with the wind and swings
+/// to and fro, with a wave that travels across the canopy, and the twigs flutter a little faster.
+fn sway(tier: u8, s0: (f32, f32), p: &Pose) -> f32 {
+    if p.wind <= 0.0 {
+        return 0.0;
+    }
+    const STEP: [f32; 6] = [0.0, 0.012, 0.016, 0.022, 0.030, 0.040];
+    let wave = p.phase + s0.0 * 0.021 + s0.1 * 0.009;
+    let gust = 0.65 + 0.35 * (p.phase * 0.31 + 1.0).sin();
+    let flutter = if tier >= 4 { 0.25 * (p.phase * 2.7 + s0.0 * 0.07 + s0.1 * 0.05).sin() } else { 0.0 };
+    STEP[tier as usize] * p.wind.min(1.0) * gust * (0.55 + 0.45 * wave.sin() + flutter)
 }
 
 impl Branch {
@@ -191,6 +278,81 @@ mod tests {
         let e = b.at(1.0);
         assert!((e.0 - b.p1.0).abs() < 1e-3 && (e.1 - b.p1.1).abs() < 1e-3);
         assert!(t.tips.iter().all(|t| t.done <= GROWN_AT));
+    }
+
+    fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
+        ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn every_knob_owns_a_limb() {
+        let t = Tree::build();
+        assert_eq!(t.own_branch.len(), OWN_COUNT);
+        let mut seen = std::collections::HashSet::new();
+        for &b in &t.own_branch {
+            assert!(b < t.branches.len(), "a knob has no limb");
+            assert!(seen.insert(b), "two knobs share a limb");
+        }
+        assert_eq!(t.branches.iter().filter(|b| b.own.is_some()).count(), OWN_COUNT);
+    }
+
+    #[test]
+    fn rest_pose_is_the_drawn_tree() {
+        let t = Tree::build();
+        let lens = vec![1.0; OWN_COUNT];
+        let p = t.pose(&Pose { lens: &lens, wind: 0.0, phase: 1.3 });
+        for (b, c) in t.branches.iter().zip(&p.curves) {
+            assert!(dist(c[0], b.p0) < 1e-2 && dist(c[1], b.c) < 1e-2 && dist(c[2], b.p1) < 1e-2, "branch moved at rest");
+        }
+        // an empty lens list means "as drawn" too
+        let q = t.pose(&Pose { lens: &[], wind: 0.0, phase: 0.0 });
+        assert!(dist(q.curves[40][2], t.branches[40].p1) < 1e-2);
+    }
+
+    #[test]
+    fn knob_length_scales_its_limb_and_carries_children() {
+        let t = Tree::build();
+        let n = 40; // an L3 limb (third-level)
+        let bi = t.own_branch[n];
+        let b = t.branches[bi];
+        let mut lens = vec![1.0; OWN_COUNT];
+        lens[n] = 2.0;
+        let p = t.pose(&Pose { lens: &lens, wind: 0.0, phase: 0.0 });
+        let len0 = dist(b.p0, b.p1);
+        assert!((dist(p.curves[bi][0], p.curves[bi][2]) - 2.0 * len0).abs() < 0.05);
+        assert!(dist(p.curves[bi][0], b.p0) < 1e-2, "limb must still start where its parent ends");
+        // a limb that grows from this one starts at its new end
+        let kid = t.branches.iter().position(|k| k.parent == Some(bi));
+        if let Some(k) = kid {
+            assert!(dist(p.curves[k][0], p.curves[bi][2]) < 1e-3);
+        }
+    }
+
+    #[test]
+    fn wind_sways_the_canopy_not_the_roots() {
+        let t = Tree::build();
+        let lens = vec![1.0; OWN_COUNT];
+        let calm = t.pose(&Pose { lens: &lens, wind: 0.0, phase: 0.7 });
+        let gale = t.pose(&Pose { lens: &lens, wind: 1.0, phase: 0.7 });
+        for (i, b) in t.branches.iter().enumerate() {
+            if b.tier == 0 {
+                assert!(dist(calm.curves[i][2], gale.curves[i][2]) < 1e-3, "roots must stay put");
+            }
+        }
+        let mut moved = 0.0f32;
+        for i in 0..t.tips.len() {
+            moved = moved.max(dist(calm.tip(&t, i), gale.tip(&t, i)));
+        }
+        assert!(moved > 3.0 && moved < 40.0, "tips moved {moved}");
+        // the sway swings over time
+        let later = t.pose(&Pose { lens: &lens, wind: 1.0, phase: 0.7 + 1.6 });
+        let twig = t.tips.iter().position(|tp| t.branches[tp.branch].tier == 5).unwrap();
+        assert!(dist(gale.tip(&t, twig), later.tip(&t, twig)) > 0.5);
+        // limb lengths survive the bend
+        for (i, b) in t.branches.iter().enumerate() {
+            let l0 = dist(b.p0, b.p1);
+            assert!((dist(gale.curves[i][0], gale.curves[i][2]) - l0).abs() < 0.05, "limb {i} changed length");
+        }
     }
 
     #[test]

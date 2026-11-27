@@ -23,6 +23,22 @@ boxes on the left (edit pages only) (Envelope & LFO at the top, Oscillators, Fil
 and down, hold Shift for fine steps, double-click for the default. The seed box, Randomize, Correct tune, Save and Load
 sit in the bottom row. The waves, orbit and waveform previews follow the host tempo.
 
+### Look: Autumn tree, wind, skins
+
+The tree is the **Autumn** pixel-block tree: stamped from square blocks, bark brown at the roots turning to gold at the twigs,
+orange-red tips, a few twinkling pale beacons, and the seed at the base that the roots and trunk sprout from.
+
+* **Knobs change limb lengths.** Each of the 49 knobs on the three edit pages owns one limb (twigs first, then the third- and
+  second-level limbs). Turn a knob up from its default and its limb grows, turn it down and it shrinks; everything growing from
+  its end is carried along. The limb of the knob you are dragging lights up. Home shows the same tree for the current patch.
+* **Wind.** While sound is playing the branches sway, the harder the louder: they lean with the wind, swing in a wave across
+  the canopy and the twigs flutter. When the sound stops the tree settles again. The roots stay put.
+* **Skins.** *SKIN* on Home steps through the skins. Built in: **Indigo** (the original look), **Dusk**
+  (`151e3f 030027 f2f3d9 dc9e82 c16e70`), **Brass** (`363636 242f40 cca43b e5e5e5 ffffff`), **Oxblood**
+  (`0a0908 49111c f2f4f3 a9927d 5e503f`), Seedling, Skin 1-3, and *Seed colours* (a palette grown from the patch seed).
+  Your own are `.seedskin` files in `Documents/Seedling/Skins` (five hex colours, any order; see the README written there).
+  The choice is saved with the session. The tree keeps its Autumn colours in every skin.
+
 ### Design rule
 
 Only one tree is on screen at a time. The edit pages show the tree on the left, running through the three page boxes.
@@ -47,4 +63,4 @@ Presets are plain text files in `Documents/Seedling/Presets`.
 
 ## Not yet in the Rust version
 
-Skins and seed-derived colours (paused while the new look settles), the 3D tree. The window scales freely; the growing tree and the wave background run on the host tempo.
+The 3D tree. The window scales freely; the growing tree and the wave background run on the host tempo.
